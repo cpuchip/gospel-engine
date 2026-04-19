@@ -1,0 +1,58 @@
+# Local-only docker-compose for testing the gospel-engine + Postgres stack.
+# DO NOT USE IN PRODUCTION — production deploys via Dokploy with the raw
+# Dockerfile and an external Postgres.
+#
+# Usage:
+#   docker compose -f docker-compose.local.yml up --build
+#   curl http://localhost:8080/api/health
+#
+# Mounts the repo's gospel-library and books folders read-only into the
+# container so the indexer has real data to chew on.
+
+services:
+  db:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_USER: gospel
+      POSTGRES_PASSWORD: gospel
+      POSTGRES_DB: gospel
+    ports:
+      - "5433:5432"   # avoid clashing with any local postgres on 5432
+    volumes:
+      - gospel-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gospel -d gospel"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      args:
+        VERSION: local-dev
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      LISTEN_ADDR: ":8080"
+      GOSPEL_DB: "postgres://gospel:gospel@db:5432/gospel?sslmode=disable"
+      EMBEDDING_URL: "http://host.docker.internal:1234/v1"
+      EMBEDDING_MODEL: "nomic-embed-text-v1.5"
+      GOSPEL_LIBRARY_PATH: "/data/gospel-library"
+      BOOKS_PATH: "/data/books"
+      EMBEDDINGS_PATH: "/data/embeddings"
+      MCP_BINARIES_PATH: "/opt/mcp-binaries"
+      INDEX_ON_STARTUP: "false"   # set to true once you want the indexer to run
+      DEV_MODE: "true"            # bypass token auth for local testing
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../../gospel-library:/data/gospel-library:ro
+      - ../../books:/data/books:ro
+    extra_hosts:
+      # Lets the container reach LM Studio on the host for embeddings.
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  gospel-pgdata:
