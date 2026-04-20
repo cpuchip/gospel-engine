@@ -72,6 +72,23 @@ func run() error {
 					res.ScripturesIndexed, res.ChaptersIndexed, res.TalksIndexed,
 					res.ManualsIndexed, res.BooksIndexed, res.Skipped, res.Errors, res.Duration)
 			}
+
+			// --- Embedding pass (only if embedder is healthy and bulk loading is enabled) ---
+			if embedder != nil && cfg.BulkLoadEmbeds {
+				log.Printf("embed pass starting")
+				eres, err := idx.EmbedAll(rootCtx, embedder)
+				if err != nil {
+					log.Printf("embed pass error: %v", err)
+				}
+				if eres != nil {
+					log.Printf("embed pass done: verses=%d paragraphs=%d errors=%d (%s)",
+						eres.Verses, eres.Paragraphs, eres.Errors, eres.Duration)
+				}
+			} else if embedder == nil {
+				log.Printf("embed pass skipped: embedding server unavailable")
+			} else {
+				log.Printf("embed pass skipped: BULK_LOAD_EMBEDDINGS=false")
+			}
 		}()
 	}
 
