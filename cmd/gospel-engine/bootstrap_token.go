@@ -1,7 +1,8 @@
 // Subcommand: bootstrap-token
 //
 // Usage (inside the running container):
-//   /app/gospel-engine bootstrap-token --name "service" [--user michael] [--rate-limit 600]
+//
+//	/app/gospel-engine bootstrap-token --name "service" [--user michael] [--rate-limit 600]
 //
 // Connects to the same DB the server uses, mints a new bearer token, and
 // prints the raw secret to stdout exactly once. Safe to run multiple times
