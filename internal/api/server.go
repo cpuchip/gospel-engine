@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -18,6 +19,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
+
+//go:embed web/index.html
+var indexHTML []byte
 
 // Server holds the dependencies the handlers need.
 type Server struct {
@@ -38,6 +42,7 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.Timeout(60 * time.Second))
 
 	// Public — no auth required.
+	r.Get("/", s.handleIndex)
 	r.Get("/api/health", s.handleHealth)
 	r.Get("/api/version", s.handleVersion)
 	r.Get("/download/{filename}", s.handleDownload)
@@ -60,6 +65,16 @@ func (s *Server) Router() http.Handler {
 	})
 
 	return r
+}
+
+// ============================================================================
+// / — landing page (embedded HTML, no auth)
+// ============================================================================
+
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	_, _ = w.Write(indexHTML)
 }
 
 // ============================================================================

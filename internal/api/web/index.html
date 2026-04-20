@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>gospel-engine</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a1f29;
+    --text: #e5e9f0;
+    --muted: #8b96a8;
+    --accent: #7aa2f7;
+    --accent-hover: #a6c4ff;
+    --border: #2a2f3a;
+    --code-bg: #0a0e14;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  .container {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 3rem 1.5rem 5rem;
+  }
+  h1 {
+    font-size: 2rem;
+    margin: 0 0 0.25rem;
+    letter-spacing: -0.02em;
+  }
+  .tagline {
+    color: var(--muted);
+    margin: 0 0 2.5rem;
+  }
+  h2 {
+    font-size: 1.15rem;
+    margin: 2.5rem 0 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+  }
+  .meta {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.25rem 1.5rem;
+    font-size: 0.92rem;
+  }
+  .meta dt { color: var(--muted); }
+  .meta dd { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .status-ok   { color: #9ece6a; }
+  .status-err  { color: #f7768e; }
+  ul.bins {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  ul.bins li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.6rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+  ul.bins li:last-child { border-bottom: none; }
+  ul.bins .platform { font-family: ui-monospace, monospace; font-size: 0.92rem; }
+  a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  a:hover { color: var(--accent-hover); text-decoration: underline; }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.9rem 1rem;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    line-height: 1.55;
+  }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  p code {
+    background: var(--code-bg);
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    font-size: 0.88em;
+  }
+  footer {
+    margin-top: 4rem;
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>gospel-engine</h1>
+  <p class="tagline">Scripture search, conference talks, and study-aid API — powered by PostgreSQL + pgvector.</p>
+
+  <h2>Status</h2>
+  <div class="panel">
+    <dl class="meta" id="status">
+      <dt>Version</dt><dd id="m-version">—</dd>
+      <dt>Uptime</dt><dd id="m-uptime">—</dd>
+      <dt>Database</dt><dd id="m-db">—</dd>
+      <dt>API</dt><dd>v1</dd>
+    </dl>
+  </div>
+
+  <h2>MCP clients</h2>
+  <p>The <code>gospel-mcp</code> binary is a stdio MCP server that bridges your local AI client (VS Code Copilot, Claude Desktop, etc.) to this API. Download the binary for your platform:</p>
+  <div class="panel">
+    <ul class="bins" id="bins"><li><span class="platform">loading…</span></li></ul>
+  </div>
+
+  <h2>Configure your MCP client</h2>
+  <p>Download the binary, make it executable (<code>chmod +x gospel-mcp-*</code> on macOS/Linux), then add it to your MCP client. An <a href="/api/admin/tokens">API token</a> is required.</p>
+  <pre><code id="mcp-config">{
+  "mcpServers": {
+    "gospel": {
+      "command": "/absolute/path/to/gospel-mcp-&lt;os&gt;-&lt;arch&gt;",
+      "env": {
+        "GOSPEL_ENGINE_URL": "https://study.ibeco.me",
+        "GOSPEL_ENGINE_TOKEN": "stdy_..."
+      }
+    }
+  }
+}</code></pre>
+  <p>The client auto-updates: on startup it checks <code>/api/version</code> and pulls a newer binary if available. Disable with <code>GOSPEL_AUTO_UPDATE=false</code>.</p>
+
+  <h2>API</h2>
+  <p>Three endpoints, bearer-token authenticated:</p>
+  <pre><code>GET /api/search?q=faith&amp;mode=hybrid&amp;limit=20
+GET /api/get?ref=1+Nephi+3:7
+GET /api/list?type=scriptures</code></pre>
+
+  <footer>
+    gospel-engine · <a href="/api/health">health</a> · <a href="/api/version">version</a>
+  </footer>
+</div>
+
+<script>
+(async () => {
+  try {
+    const [h, v] = await Promise.all([
+      fetch("/api/health").then(r => r.json()),
+      fetch("/api/version").then(r => r.json()),
+    ]);
+    document.getElementById("m-version").textContent = h.version || v.version || "unknown";
+    document.getElementById("m-uptime").textContent  = h.uptime  || "—";
+    const dbEl = document.getElementById("m-db");
+    dbEl.textContent = h.db_ok ? "connected" : "DOWN";
+    dbEl.className   = h.db_ok ? "status-ok" : "status-err";
+
+    const bins = document.getElementById("bins");
+    bins.innerHTML = "";
+    (v.binaries || []).forEach(name => {
+      const li = document.createElement("li");
+      const label = name
+        .replace(/^gospel-mcp-/, "")
+        .replace(/\.exe$/, " (exe)")
+        .replace(/-/, " / ");
+      li.innerHTML = '<span class="platform">' + label + '</span>' +
+                     '<a href="/download/' + encodeURIComponent(name) + '" download>download</a>';
+      bins.appendChild(li);
+    });
+    if (bins.children.length === 0) {
+      bins.innerHTML = '<li><span class="platform">No binaries available.</span></li>';
+    }
+  } catch (err) {
+    console.error(err);
+    document.getElementById("m-db").textContent = "unreachable";
+    document.getElementById("m-db").className   = "status-err";
+  }
+})();
+</script>
+</body>
+</html>
