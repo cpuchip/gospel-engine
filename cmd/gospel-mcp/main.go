@@ -120,7 +120,11 @@ func (c *client) handle(enc *json.Encoder, req *rpcReq) {
 	case "notifications/initialized":
 		// no-op
 	default:
-		send(enc, rpcResp{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32601, Message: "method not found"}})
+		// JSON-RPC 2.0: notifications (no id) MUST NOT receive a
+		// response, even an error. Only error on real requests.
+		if req.ID != nil {
+			send(enc, rpcResp{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32601, Message: "method not found"}})
+		}
 	}
 }
 
