@@ -29,6 +29,7 @@ const (
 	SourceTalks      Source = "talks"
 	SourceManuals    Source = "manuals"
 	SourceBooks      Source = "books"
+	SourceStudyAids  Source = "study_aids"
 )
 
 // Result is a single search hit.
@@ -43,6 +44,8 @@ type Result struct {
 	Speaker    string  `json:"speaker,omitempty"`
 	Year       int     `json:"year,omitempty"`
 	Month      string  `json:"month,omitempty"`
+	AidType    string  `json:"aid_type,omitempty"`
+	Slug       string  `json:"slug,omitempty"`
 }
 
 // Searcher orchestrates keyword + semantic search.
@@ -73,7 +76,7 @@ func (s *Searcher) Search(ctx context.Context, opt Options) ([]Result, error) {
 		opt.Mode = ModeHybrid
 	}
 	if len(opt.Sources) == 0 {
-		opt.Sources = []Source{SourceScriptures, SourceTalks, SourceManuals, SourceBooks}
+		opt.Sources = []Source{SourceScriptures, SourceTalks, SourceManuals, SourceBooks, SourceStudyAids}
 	}
 
 	switch opt.Mode {
@@ -216,6 +219,34 @@ func (s *Searcher) keyword(ctx context.Context, opt Options) ([]Result, error) {
 		rows.Close()
 	}
 
+	if wantSet[SourceStudyAids] {
+		rows, err := s.DB.Pool.Query(ctx, `
+			SELECT id, aid_type, slug, title, file_path, content,
+			       ts_rank(tsv, plainto_tsquery('english', $1)) AS rank
+			FROM study_aids
+			WHERE tsv @@ plainto_tsquery('english', $1)
+			ORDER BY rank DESC
+			LIMIT $2
+		`, opt.Query, opt.Limit)
+		if err != nil {
+			return nil, fmt.Errorf("study_aids fts: %w", err)
+		}
+		for rows.Next() {
+			var (
+				r       Result
+				content string
+			)
+			r.SourceType = "study_aids"
+			if err := rows.Scan(&r.SourceID, &r.AidType, &r.Slug, &r.Title, &r.FilePath, &content, &r.Score); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			r.Snippet = snippet(content, 240)
+			all = append(all, r)
+		}
+		rows.Close()
+	}
+
 	// Sort by descending FTS rank, then truncate.
 	sortByScore(all)
 	if len(all) > opt.Limit {
@@ -300,6 +331,10 @@ func (s *Searcher) enrich(ctx context.Context, r *Result) error {
 		return s.DB.Pool.QueryRow(ctx,
 			`SELECT title, file_path FROM books WHERE id = $1`, r.SourceID,
 		).Scan(&r.Title, &r.FilePath)
+	case "study_aids":
+		return s.DB.Pool.QueryRow(ctx,
+			`SELECT aid_type, slug, title, file_path FROM study_aids WHERE id = $1`, r.SourceID,
+		).Scan(&r.AidType, &r.Slug, &r.Title, &r.FilePath)
 	}
 	return nil
 }
