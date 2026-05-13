@@ -15,6 +15,7 @@ import (
 	"github.com/cpuchip/gospel-engine/internal/auth"
 	"github.com/cpuchip/gospel-engine/internal/config"
 	"github.com/cpuchip/gospel-engine/internal/db"
+	"github.com/cpuchip/gospel-engine/internal/indexer"
 	"github.com/cpuchip/gospel-engine/internal/search"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -28,6 +29,7 @@ type Server struct {
 	Cfg      *config.Config
 	DB       *db.DB
 	Searcher *search.Searcher
+	Indexer  *indexer.Indexer // optional; required for /api/admin/reparse-speakers
 	Started  time.Time
 }
 
@@ -62,6 +64,7 @@ func (s *Server) Router() http.Handler {
 		g.Get("/api/admin/tokens", s.handleListTokens)
 		g.Delete("/api/admin/tokens/{id}", s.handleRevokeToken)
 		g.Post("/api/admin/reindex", s.handleReindex)
+		g.Post("/api/admin/reparse-speakers", s.handleReparseSpeakers)
 	})
 
 	return r
@@ -576,7 +579,29 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 	w.Write([]byte(`{"status":"started"}`))
 }
-
+// handleReparseSpeakers re-runs the talk-header parser against the on-disk
+// markdown for every row in the talks table, updating speaker when the new
+// value differs and is not a known-bad shape. Synchronous (the work is text
+// parsing + small UPDATEs, ~5-10s for the full corpus). Returns counts.
+func (s *Server) handleReparseSpeakers(w http.ResponseWriter, r *http.Request) {
+	if s.Indexer == nil {
+		http.Error(w, "indexer not configured", http.StatusServiceUnavailable)
+		return
+	}
+	res, err := s.Indexer.ReparseSpeakers(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total":       res.Total,
+		"changed":     res.Changed,
+		"unchanged":   res.Unchanged,
+		"failed":      res.Failed,
+		"missing":     res.Missing,
+		"duration_ms": res.Duration.Milliseconds(),
+	})
+}
 // ============================================================================
 // helpers
 // ============================================================================

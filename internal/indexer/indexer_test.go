@@ -62,6 +62,18 @@ func TestParseTalkHeader(t *testing.T) {
 			wantSpeaker: "",
 		},
 		{
+			name: "modern with parenthetical citation epigraph between H1 and By",
+			input: "# All Who Have Endured Valiantly\n\n" +
+				"🎧 [Listen to Audio](https://x.mp3)\n\n" +
+				"# All Who Have Endured Valiantly\n\n" +
+				"([Doctrine and Covenants 121:29](../../../scriptures/dc-testament/dc/121.md))\n\n" +
+				"By Elder David A. Bednar\n\n" +
+				"Of the Quorum of the Twelve Apostles\n\n" +
+				"Body.\n",
+			wantTitle:   "All Who Have Endured Valiantly",
+			wantSpeaker: "Elder David A. Bednar",
+		},
+		{
 			name:        "no title at all",
 			input:       "Just some prose.\n",
 			wantTitle:   "",

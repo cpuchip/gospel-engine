@@ -418,6 +418,12 @@ func parseTalkHeader(s string) (title, speaker, content string) {
 		if isAudioLinkLine(t) {
 			continue
 		}
+		if isParentheticalCitation(t) {
+			// Modern church.org sometimes inserts a parenthetical scripture
+			// reference between the duplicated H1 and the speaker, e.g.
+			//   ([Doctrine and Covenants 121:29](../../...))
+			continue
+		}
 		if strings.HasPrefix(t, "# ") {
 			// duplicated title; skip
 			continue
@@ -458,6 +464,19 @@ func isAudioLinkLine(t string) bool {
 		return true
 	}
 	return false
+}
+
+// isParentheticalCitation matches lines that are entirely wrapped in
+// parentheses, used by modern church.org for scripture epigraph lines
+// between the title and speaker. Examples:
+//
+//	([Doctrine and Covenants 121:29](../../../scriptures/dc-testament/dc/121.md))
+//	(See Mosiah 2:17.)
+//
+// Speaker lines never begin with '(' in either modern or pre-redesign
+// talks, so this skip is safe.
+func isParentheticalCitation(t string) bool {
+	return strings.HasPrefix(t, "(") && strings.HasSuffix(t, ")")
 }
 
 // ============================================================================

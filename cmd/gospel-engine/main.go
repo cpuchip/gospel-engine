@@ -58,11 +58,12 @@ func run() error {
 	}
 	pingCancel()
 
-	// --- Indexer (background, non-blocking) ---
+	// --- Indexer (always constructed; backgrounded only when configured) ---
+	idx := indexer.New(database, cfg.GospelLibraryPath, cfg.BooksPath)
+	idx.LogDir = cfg.LogDir
+
 	if cfg.IndexOnStartup {
 		go func() {
-			idx := indexer.New(database, cfg.GospelLibraryPath, cfg.BooksPath)
-			idx.LogDir = cfg.LogDir
 			log.Printf("indexer starting (gospel=%s, books=%s)", cfg.GospelLibraryPath, cfg.BooksPath)
 			res, err := idx.IndexAll(rootCtx)
 			if err != nil {
@@ -98,6 +99,7 @@ func run() error {
 		Cfg:      cfg,
 		DB:       database,
 		Searcher: search.NewSearcher(database, embedder),
+		Indexer:  idx,
 		Started:  time.Now(),
 	}
 	httpSrv := &http.Server{
