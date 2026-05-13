@@ -167,9 +167,13 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 	typ := strings.TrimSpace(r.URL.Query().Get("type"))
 	idStr := strings.TrimSpace(r.URL.Query().Get("id"))
+	// cross_refs is opt-in (Phase 1.5c). Only meaningful for verse / range
+	// responses; silently ignored for type=talk/manual/book and chapter-only
+	// scripture lookups.
+	crossRefs := r.URL.Query().Get("cross_refs") == "true"
 
 	if ref != "" {
-		s.getByReference(w, r, ref)
+		s.getByReference(w, r, ref, crossRefs)
 		return
 	}
 	if typ != "" && idStr != "" {
@@ -196,7 +200,7 @@ type verseRow struct {
 	FilePath  string `json:"file_path"`
 }
 
-func (s *Server) getByReference(w http.ResponseWriter, r *http.Request, ref string) {
+func (s *Server) getByReference(w http.ResponseWriter, r *http.Request, ref string, crossRefs bool) {
 	parsed, ok := parseReference(ref)
 	if !ok {
 		http.Error(w, fmt.Sprintf("could not parse reference %q (try '1 Nephi 3:7', 'D&C 93:24-30', or 'Mosiah 4')", ref), http.StatusBadRequest)
@@ -205,15 +209,16 @@ func (s *Server) getByReference(w http.ResponseWriter, r *http.Request, ref stri
 
 	switch {
 	case parsed.Verse > 0 && parsed.EndVerse > 0:
-		s.getVerseRange(w, r, ref, parsed)
+		s.getVerseRange(w, r, ref, parsed, crossRefs)
 	case parsed.Verse > 0:
-		s.getSingleVerse(w, r, ref, parsed)
+		s.getSingleVerse(w, r, ref, parsed, crossRefs)
 	default:
+		// Chapter-only refs skip cross_refs (out of scope per Phase 1.5c).
 		s.getChapter(w, r, ref, parsed)
 	}
 }
 
-func (s *Server) getSingleVerse(w http.ResponseWriter, r *http.Request, queryRef string, p parsedRef) {
+func (s *Server) getSingleVerse(w http.ResponseWriter, r *http.Request, queryRef string, p parsedRef, crossRefs bool) {
 	row := s.DB.Pool.QueryRow(r.Context(),
 		`SELECT id, volume, book, chapter, verse, reference, text, file_path
 		 FROM scriptures WHERE book = $1 AND chapter = $2 AND verse = $3 LIMIT 1`,
@@ -223,14 +228,23 @@ func (s *Server) getSingleVerse(w http.ResponseWriter, r *http.Request, queryRef
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"source_type":     "scriptures",
 		"reference_query": queryRef,
 		"verses":          []verseRow{v},
-	})
+	}
+	if crossRefs {
+		xrefs, err := s.fetchCrossRefs(r.Context(), []verseRow{v})
+		if err != nil {
+			http.Error(w, fmt.Sprintf("cross_refs failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		resp["cross_references"] = xrefs
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) getVerseRange(w http.ResponseWriter, r *http.Request, queryRef string, p parsedRef) {
+func (s *Server) getVerseRange(w http.ResponseWriter, r *http.Request, queryRef string, p parsedRef, crossRefs bool) {
 	if p.EndVerse < p.Verse {
 		http.Error(w, "end verse is before start verse", http.StatusBadRequest)
 		return
@@ -264,11 +278,20 @@ func (s *Server) getVerseRange(w http.ResponseWriter, r *http.Request, queryRef 
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"source_type":     "scriptures",
 		"reference_query": queryRef,
 		"verses":          verses,
-	})
+	}
+	if crossRefs {
+		xrefs, err := s.fetchCrossRefs(r.Context(), verses)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("cross_refs failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		resp["cross_references"] = xrefs
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) getChapter(w http.ResponseWriter, r *http.Request, queryRef string, p parsedRef) {
