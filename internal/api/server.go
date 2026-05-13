@@ -610,9 +610,15 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "indexer not configured", http.StatusServiceUnavailable)
 		return
 	}
+	force := r.URL.Query().Get("force") == "true"
 	go func() {
 		ctx := context.Background()
-		log.Printf("reindex: starting (triggered by API)")
+		if force {
+			ctx = indexer.WithForce(ctx)
+			log.Printf("reindex: starting (triggered by API, force=true)")
+		} else {
+			log.Printf("reindex: starting (triggered by API)")
+		}
 		res, err := s.Indexer.IndexAll(ctx)
 		if err != nil {
 			log.Printf("reindex: failed: %v", err)

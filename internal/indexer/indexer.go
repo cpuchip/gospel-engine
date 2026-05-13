@@ -33,6 +33,24 @@ func New(database *db.DB, gospelRoot, booksRoot string) *Indexer {
 	return &Indexer{DB: database, GospelLibraryRoot: gospelRoot, BooksRoot: booksRoot}
 }
 
+// forceKey is the context key for forcing a full reindex (bypassing the
+// mtime/size cache in index_metadata). Use WithForce to enable.
+type forceKey struct{}
+
+// WithForce returns a context that, when passed to IndexAll, causes the walker
+// to bypass shouldIndex and re-process every file. Useful after migrations
+// that add new dispatches on existing paths (e.g. Phase 1.5e study_aids,
+// where index_metadata was populated by an earlier deploy that silently
+// skipped tg/bd/gs/jst paths).
+func WithForce(ctx context.Context) context.Context {
+	return context.WithValue(ctx, forceKey{}, true)
+}
+
+func isForce(ctx context.Context) bool {
+	v, _ := ctx.Value(forceKey{}).(bool)
+	return v
+}
+
 // Result is a small summary returned to the caller.
 type Result struct {
 	ScripturesIndexed int
@@ -144,6 +162,9 @@ func sectionType(section string) string {
 
 // shouldIndex returns true if the file is new or modified since last index.
 func (idx *Indexer) shouldIndex(ctx context.Context, path string, info os.FileInfo, contentType string) bool {
+	if isForce(ctx) {
+		return true
+	}
 	var (
 		mtime time.Time
 		size  int64
