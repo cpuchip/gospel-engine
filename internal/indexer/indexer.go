@@ -353,27 +353,103 @@ func (idx *Indexer) indexTalkFile(ctx context.Context, path string, parts []stri
 	return nil
 }
 
-// parseTalkHeader extracts title (first H1), speaker (first non-empty paragraph
-// after H1), and content (rest of file with markdown noise stripped).
+// parseTalkHeader extracts title (first H1), speaker (first speaker-like line
+// after the title), and content (everything after the speaker line).
+//
+// The modern church.org export inserts noise between the title and the
+// speaker that the previous version of this parser captured as "speaker":
+//
+//	# Title
+//
+//	🎧 [Listen to Audio](https://...mp3)
+//
+//	# Title                       <- duplicated H1
+//
+//	By President Dallin H. Oaks   <- actual speaker, with "By " prefix
+//
+// Older talks (pre-redesign) had the format:
+//
+//	# Title
+//
+//	Elder Bruce R. McConkie
+//
+// This parser handles both. After the title is found, it skips lines that
+// are empty, audio-link lines (start with "🎧" or "[Listen to Audio"), or
+// further H1 headings (the duplicated title case). The first surviving
+// non-empty line is the speaker candidate. If it begins with "By " (case
+// insensitive) the prefix is stripped. The result is run through
+// cleanInlineMarkdown to strip italics / link wrappers.
+//
+// If no speaker can be found the function returns speaker="" and the caller
+// is responsible for logging / not overwriting an existing DB value.
 func parseTalkHeader(s string) (title, speaker, content string) {
 	lines := strings.Split(s, "\n")
 	contentStart := 0
+
+	// 1) Find the first H1 = title.
+	titleIdx := -1
 	for i, line := range lines {
 		t := strings.TrimSpace(line)
-		if title == "" && strings.HasPrefix(t, "# ") {
+		if strings.HasPrefix(t, "# ") {
 			title = strings.TrimSpace(strings.TrimPrefix(t, "# "))
-			contentStart = i + 1
-			continue
-		}
-		if title != "" && speaker == "" && t != "" && !strings.HasPrefix(t, "#") {
-			// Strip italics, links, etc.
-			speaker = cleanInlineMarkdown(t)
+			titleIdx = i
 			contentStart = i + 1
 			break
 		}
 	}
+	if titleIdx < 0 {
+		return
+	}
+
+	// 2) Walk forward looking for the speaker, skipping known noise.
+	for i := titleIdx + 1; i < len(lines); i++ {
+		t := strings.TrimSpace(lines[i])
+		if t == "" {
+			continue
+		}
+		if isAudioLinkLine(t) {
+			continue
+		}
+		if strings.HasPrefix(t, "# ") {
+			// duplicated title; skip
+			continue
+		}
+		// Candidate speaker line.
+		cleaned := cleanInlineMarkdown(t)
+		// Strip a leading "By " (case-insensitive). Only strip if there's
+		// something after — "By " alone is meaningless and should fall
+		// through to the empty-result branch.
+		if len(cleaned) > 3 {
+			lower := strings.ToLower(cleaned)
+			if strings.HasPrefix(lower, "by ") {
+				cleaned = strings.TrimSpace(cleaned[3:])
+			}
+		}
+		if cleaned != "" {
+			speaker = cleaned
+			contentStart = i + 1
+		}
+		break
+	}
+
 	content = strings.Join(lines[contentStart:], "\n")
 	return
+}
+
+// isAudioLinkLine matches the church.org "Listen to Audio" lines that
+// appear between the title and the speaker in modern talk markdown.
+// Examples:
+//
+//	🎧 [Listen to Audio](https://...mp3)
+//	[Listen to Audio](https://...mp3)
+func isAudioLinkLine(t string) bool {
+	if strings.HasPrefix(t, "🎧") {
+		return true
+	}
+	if strings.HasPrefix(t, "[Listen to Audio") {
+		return true
+	}
+	return false
 }
 
 // ============================================================================
