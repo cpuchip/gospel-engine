@@ -62,6 +62,7 @@ func run() error {
 	if cfg.IndexOnStartup {
 		go func() {
 			idx := indexer.New(database, cfg.GospelLibraryPath, cfg.BooksPath)
+			idx.LogDir = cfg.LogDir
 			log.Printf("indexer starting (gospel=%s, books=%s)", cfg.GospelLibraryPath, cfg.BooksPath)
 			res, err := idx.IndexAll(rootCtx)
 			if err != nil {

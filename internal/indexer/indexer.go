@@ -25,6 +25,7 @@ type Indexer struct {
 	DB                *db.DB
 	GospelLibraryRoot string // /data/gospel-library
 	BooksRoot         string // /data/books
+	LogDir            string // append-only diagnostic logs (parse failures); "" disables
 }
 
 // New builds an Indexer.
@@ -336,6 +337,13 @@ func (idx *Indexer) indexTalkFile(ctx context.Context, path string, parts []stri
 	full := string(body)
 
 	title, speaker, content := parseTalkHeader(full)
+
+	// Log suspicious / failed speaker extractions for later cleanup.
+	// We don't refuse to insert -- a missing speaker is better than a
+	// missing talk -- but the log lets us audit and patch.
+	if looksLikeSpeakerFailure(speaker) {
+		idx.logSpeakerFailure(path, full, speaker)
+	}
 
 	if _, err := idx.DB.Pool.Exec(ctx, `
 		INSERT INTO talks (year, month, speaker, title, content, file_path)

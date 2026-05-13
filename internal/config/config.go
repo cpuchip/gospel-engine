@@ -28,6 +28,10 @@ type Config struct {
 	MCPBinariesPath string // /opt/mcp-binaries
 	Version         string // build version (set by ldflags)
 
+	// LogDir is where parser-failure / diagnostic append-only logs land
+	// (e.g. speaker-parse-failures.log). Empty = logging disabled.
+	LogDir string
+
 	// Behavior
 	IndexOnStartup    bool
 	BulkLoadEmbeds    bool
@@ -46,6 +50,7 @@ func Load() (*Config, error) {
 		EmbeddingsPath:    env("EMBEDDINGS_PATH", "/data/embeddings"),
 		MCPBinariesPath:   env("MCP_BINARIES_PATH", "/opt/mcp-binaries"),
 		Version:           env("VERSION", "dev"),
+		LogDir:            env("GOSPEL_LOG_DIR", "/data/logs"),
 		IndexOnStartup:    envBool("INDEX_ON_STARTUP", true),
 		BulkLoadEmbeds:    envBool("BULK_LOAD_EMBEDDINGS", true),
 		EmbedRequestTimeo: time.Duration(envInt("EMBED_TIMEOUT_SECONDS", 60)) * time.Second,
