@@ -370,6 +370,15 @@ func (s *Server) getByID(w http.ResponseWriter, r *http.Request, typ string, id 
 			return
 		}
 		out["collection"], out["section"], out["title"], out["content"], out["file_path"] = coll, sec, ti, ct, fp
+	case "study_aids":
+		var aidType, slug, ti, ct, fp string
+		if err := s.DB.Pool.QueryRow(r.Context(),
+			`SELECT aid_type, slug, title, content, file_path FROM study_aids WHERE id=$1`, id,
+		).Scan(&aidType, &slug, &ti, &ct, &fp); err != nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		out["aid_type"], out["slug"], out["title"], out["content"], out["file_path"] = aidType, slug, ti, ct, fp
 	default:
 		http.Error(w, "unknown type", http.StatusBadRequest)
 		return
@@ -461,6 +470,25 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 			items = append(items, map[string]any{"collection": c, "sections": n})
 		}
 		writeJSON(w, 200, map[string]any{"type": "books", "items": items})
+	case "study_aids":
+		rows, err := s.DB.Pool.Query(r.Context(), `
+			SELECT aid_type, COUNT(*) AS entries
+			FROM study_aids GROUP BY aid_type ORDER BY aid_type`)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		defer rows.Close()
+		var items []map[string]any
+		for rows.Next() {
+			var at string
+			var n int
+			if err := rows.Scan(&at, &n); err != nil {
+				continue
+			}
+			items = append(items, map[string]any{"aid_type": at, "entries": n})
+		}
+		writeJSON(w, 200, map[string]any{"type": "study_aids", "items": items})
 	case "":
 		// Stats.
 		stats := map[string]any{}
@@ -479,6 +507,7 @@ func (s *Server) collectStats(ctx context.Context) map[string]int {
 		"talks":      "talks",
 		"manuals":    "manuals",
 		"books":      "books",
+		"study_aids": "study_aids",
 		"embeddings": "embeddings",
 	} {
 		var n int

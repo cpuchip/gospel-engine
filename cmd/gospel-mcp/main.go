@@ -261,13 +261,13 @@ func envOr(key, def string) string {
 var tools = []map[string]any{
 	{
 		"name":        "gospel_search",
-		"description": "Search scriptures, conference talks, manuals, and books. Modes: keyword (FTS), semantic (vector), hybrid (RRF merge — default).",
+		"description": "Search scriptures, conference talks, manuals, books, and study aids (Topical Guide, Bible Dictionary, Guide to the Scriptures, JST excerpts). Modes: keyword (FTS), semantic (vector), hybrid (RRF merge — default).",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"query":   map[string]any{"type": "string", "description": "Natural-language search query"},
 				"mode":    map[string]any{"type": "string", "enum": []string{"keyword", "semantic", "hybrid"}, "description": "Search mode (default: hybrid)"},
-				"sources": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Subset of: scriptures, talks, manuals, books"},
+				"sources": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"scriptures", "talks", "manuals", "books", "study_aids"}}, "description": "Subset of: scriptures, talks, manuals, books, study_aids"},
 				"limit":   map[string]any{"type": "integer", "description": "Max results (default 20, cap 100)"},
 			},
 			"required": []string{"query"},
@@ -286,7 +286,7 @@ var tools = []map[string]any{
 			"Set `cross_refs: true` on a single-verse or verse-range query to also " +
 			"receive a `cross_references` array (footnote-derived links to other " +
 			"passages, deduped across the range). Off by default to keep responses lean.\n\n" +
-			"For talks/manuals/books, omit `reference` and pass `type` + `id`.",
+			"For talks/manuals/books/study_aids, omit `reference` and pass `type` + `id`.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -294,7 +294,7 @@ var tools = []map[string]any{
 					"type":        "string",
 					"description": "Scripture reference: \"1 Nephi 3:7\", \"D&C 93:24-30\", \"Mosiah 4\".",
 				},
-				"type": map[string]any{"type": "string", "enum": []string{"scriptures", "talks", "manuals", "books"}},
+				"type": map[string]any{"type": "string", "enum": []string{"scriptures", "talks", "manuals", "books", "study_aids"}},
 				"id":   map[string]any{"type": "integer"},
 				"cross_refs": map[string]any{
 					"type":        "boolean",
@@ -305,11 +305,11 @@ var tools = []map[string]any{
 	},
 	{
 		"name":        "gospel_list",
-		"description": "List available content. type=scriptures returns volume summaries; type=talks lists conference sessions; type=manuals lists collections; type=books lists collections; omit type for overall stats.",
+		"description": "List available content. type=scriptures returns volume summaries; type=talks lists conference sessions; type=manuals lists collections; type=books lists collections; type=study_aids returns per-aid-type counts (tg/bd/gs/jst); omit type for overall stats.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"type": map[string]any{"type": "string", "enum": []string{"scriptures", "talks", "manuals", "books"}},
+				"type": map[string]any{"type": "string", "enum": []string{"scriptures", "talks", "manuals", "books", "study_aids"}},
 			},
 		},
 	},
