@@ -180,6 +180,7 @@ func (c *client) dispatchTool(name string, args json.RawMessage) (string, error)
 			Reference string `json:"reference"`
 			Type      string `json:"type"`
 			ID        int64  `json:"id"`
+			CrossRefs bool   `json:"cross_refs"`
 		}
 		_ = json.Unmarshal(args, &a)
 		q := url.Values{}
@@ -188,6 +189,9 @@ func (c *client) dispatchTool(name string, args json.RawMessage) (string, error)
 		} else {
 			q.Set("type", a.Type)
 			q.Set("id", fmt.Sprint(a.ID))
+		}
+		if a.CrossRefs {
+			q.Set("cross_refs", "true")
 		}
 		return c.callJSON("GET", "/api/get?"+q.Encode(), nil)
 
@@ -279,6 +283,9 @@ var tools = []map[string]any{
 			"Response shape:\n" +
 			"  • single/range → {source_type:\"scriptures\", reference_query, verses:[...]}\n" +
 			"  • chapter      → {source_type:\"chapters\", reference_query, chapter:{...}}\n\n" +
+			"Set `cross_refs: true` on a single-verse or verse-range query to also " +
+			"receive a `cross_references` array (footnote-derived links to other " +
+			"passages, deduped across the range). Off by default to keep responses lean.\n\n" +
 			"For talks/manuals/books, omit `reference` and pass `type` + `id`.",
 		"inputSchema": map[string]any{
 			"type": "object",
@@ -289,6 +296,10 @@ var tools = []map[string]any{
 				},
 				"type": map[string]any{"type": "string", "enum": []string{"scriptures", "talks", "manuals", "books"}},
 				"id":   map[string]any{"type": "integer"},
+				"cross_refs": map[string]any{
+					"type":        "boolean",
+					"description": "Include footnote-derived cross-references for returned verses (opt-in; default false). Ignored for chapter and type+id lookups.",
+				},
 			},
 		},
 	},
