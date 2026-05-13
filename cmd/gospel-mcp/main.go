@@ -184,7 +184,7 @@ func (c *client) dispatchTool(name string, args json.RawMessage) (string, error)
 		_ = json.Unmarshal(args, &a)
 		q := url.Values{}
 		if a.Reference != "" {
-			q.Set("ref", a.Reference)
+			q.Set("reference", a.Reference)
 		} else {
 			q.Set("type", a.Type)
 			q.Set("id", fmt.Sprint(a.ID))
@@ -270,14 +270,25 @@ var tools = []map[string]any{
 		},
 	},
 	{
-		"name":        "gospel_get",
-		"description": "Retrieve a single record. Either pass `reference` (e.g. \"1 Nephi 3:7\") for scripture, or `type` + `id` for any content type.",
+		"name": "gospel_get",
+		"description": "Retrieve scripture by reference, or any other record by type+id.\n\n" +
+			"`reference` accepts:\n" +
+			"  • single verse — \"1 Nephi 3:7\", \"Matt 5:14\"\n" +
+			"  • verse range  — \"D&C 93:24-30\" (capped at 50 verses)\n" +
+			"  • whole chapter — \"Mosiah 4\" (returns chapters row with full_content)\n\n" +
+			"Response shape:\n" +
+			"  • single/range → {source_type:\"scriptures\", reference_query, verses:[...]}\n" +
+			"  • chapter      → {source_type:\"chapters\", reference_query, chapter:{...}}\n\n" +
+			"For talks/manuals/books, omit `reference` and pass `type` + `id`.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"reference": map[string]any{"type": "string"},
-				"type":      map[string]any{"type": "string", "enum": []string{"scriptures", "talks", "manuals", "books"}},
-				"id":        map[string]any{"type": "integer"},
+				"reference": map[string]any{
+					"type":        "string",
+					"description": "Scripture reference: \"1 Nephi 3:7\", \"D&C 93:24-30\", \"Mosiah 4\".",
+				},
+				"type": map[string]any{"type": "string", "enum": []string{"scriptures", "talks", "manuals", "books"}},
+				"id":   map[string]any{"type": "integer"},
 			},
 		},
 	},

@@ -147,11 +147,24 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 // ============================================================================
-// /api/get?ref=1+Nephi+3:7  OR  /api/get?type=talk&id=42
+// /api/get?reference=1+Nephi+3:7   (single verse)
+// /api/get?reference=D%26C+93:24-30 (verse range, capped at maxRangeVerses)
+// /api/get?reference=Mosiah+4       (chapter)
+// /api/get?ref=...                  (back-compat alias for reference=)
+// /api/get?type=talk&id=42          (direct lookup by table id)
 // ============================================================================
+
+// maxRangeVerses caps verse-range responses so a stray "Genesis 1:1-1000"
+// doesn't dump a whole chapter through the JSON encoder.
+const maxRangeVerses = 50
 
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if ref == "" {
+		// Accept the schema-correct name too. Server-side both work; agents
+		// hit either depending on which doc page they read most recently.
+		ref = strings.TrimSpace(r.URL.Query().Get("reference"))
+	}
 	typ := strings.TrimSpace(r.URL.Query().Get("type"))
 	idStr := strings.TrimSpace(r.URL.Query().Get("id"))
 
@@ -168,32 +181,122 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 		s.getByID(w, r, typ, id)
 		return
 	}
-	http.Error(w, "provide either ref= or (type= and id=)", http.StatusBadRequest)
+	http.Error(w, "provide either reference= or (type= and id=)", http.StatusBadRequest)
+}
+
+// verseRow is the per-verse payload returned in `verses[]`.
+type verseRow struct {
+	ID        int64  `json:"id"`
+	Volume    string `json:"volume"`
+	Book      string `json:"book"`
+	Chapter   int    `json:"chapter"`
+	Verse     int    `json:"verse"`
+	Reference string `json:"reference"`
+	Text      string `json:"text"`
+	FilePath  string `json:"file_path"`
 }
 
 func (s *Server) getByReference(w http.ResponseWriter, r *http.Request, ref string) {
+	parsed, ok := parseReference(ref)
+	if !ok {
+		http.Error(w, fmt.Sprintf("could not parse reference %q (try '1 Nephi 3:7', 'D&C 93:24-30', or 'Mosiah 4')", ref), http.StatusBadRequest)
+		return
+	}
+
+	switch {
+	case parsed.Verse > 0 && parsed.EndVerse > 0:
+		s.getVerseRange(w, r, ref, parsed)
+	case parsed.Verse > 0:
+		s.getSingleVerse(w, r, ref, parsed)
+	default:
+		s.getChapter(w, r, ref, parsed)
+	}
+}
+
+func (s *Server) getSingleVerse(w http.ResponseWriter, r *http.Request, queryRef string, p parsedRef) {
 	row := s.DB.Pool.QueryRow(r.Context(),
 		`SELECT id, volume, book, chapter, verse, reference, text, file_path
-		 FROM scriptures WHERE reference = $1 LIMIT 1`, ref)
-	var (
-		id                                      int64
-		volume, book, reference, text, filePath string
-		chapter, verse                          int
-	)
-	if err := row.Scan(&id, &volume, &book, &chapter, &verse, &reference, &text, &filePath); err != nil {
+		 FROM scriptures WHERE book = $1 AND chapter = $2 AND verse = $3 LIMIT 1`,
+		p.Book, p.Chapter, p.Verse)
+	var v verseRow
+	if err := row.Scan(&v.ID, &v.Volume, &v.Book, &v.Chapter, &v.Verse, &v.Reference, &v.Text, &v.FilePath); err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"source_type": "scriptures",
-		"id":          id,
-		"volume":      volume,
-		"book":        book,
-		"chapter":     chapter,
-		"verse":       verse,
-		"reference":   reference,
-		"text":        text,
-		"file_path":   filePath,
+		"source_type":     "scriptures",
+		"reference_query": queryRef,
+		"verses":          []verseRow{v},
+	})
+}
+
+func (s *Server) getVerseRange(w http.ResponseWriter, r *http.Request, queryRef string, p parsedRef) {
+	if p.EndVerse < p.Verse {
+		http.Error(w, "end verse is before start verse", http.StatusBadRequest)
+		return
+	}
+	if p.EndVerse-p.Verse+1 > maxRangeVerses {
+		http.Error(w, fmt.Sprintf("verse range exceeds limit of %d verses", maxRangeVerses), http.StatusBadRequest)
+		return
+	}
+
+	rows, err := s.DB.Pool.Query(r.Context(),
+		`SELECT id, volume, book, chapter, verse, reference, text, file_path
+		 FROM scriptures
+		 WHERE book = $1 AND chapter = $2 AND verse BETWEEN $3 AND $4
+		 ORDER BY verse`,
+		p.Book, p.Chapter, p.Verse, p.EndVerse)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("query failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var verses []verseRow
+	for rows.Next() {
+		var v verseRow
+		if err := rows.Scan(&v.ID, &v.Volume, &v.Book, &v.Chapter, &v.Verse, &v.Reference, &v.Text, &v.FilePath); err != nil {
+			continue
+		}
+		verses = append(verses, v)
+	}
+	if len(verses) == 0 {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"source_type":     "scriptures",
+		"reference_query": queryRef,
+		"verses":          verses,
+	})
+}
+
+func (s *Server) getChapter(w http.ResponseWriter, r *http.Request, queryRef string, p parsedRef) {
+	row := s.DB.Pool.QueryRow(r.Context(),
+		`SELECT id, volume, book, chapter, title, full_content, file_path
+		 FROM chapters WHERE book = $1 AND chapter = $2 LIMIT 1`,
+		p.Book, p.Chapter)
+	var (
+		id                                              int64
+		volume, book, title, fullContent, filePath      string
+		chapter                                         int
+	)
+	if err := row.Scan(&id, &volume, &book, &chapter, &title, &fullContent, &filePath); err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"source_type":     "chapters",
+		"reference_query": queryRef,
+		"chapter": map[string]any{
+			"id":           id,
+			"volume":       volume,
+			"book":         book,
+			"chapter":      chapter,
+			"title":        title,
+			"full_content": fullContent,
+			"file_path":    filePath,
+		},
 	})
 }
 
