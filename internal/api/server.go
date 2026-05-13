@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -572,9 +573,25 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
-	// Long-running — fire and forget; return 202.
+	// Long-running — fire and forget; return 202. The actual work runs in a
+	// background goroutine with a fresh context (the request context would be
+	// canceled when the HTTP handler returns). Progress is logged; future work
+	// could persist to a status table.
+	if s.Indexer == nil {
+		http.Error(w, "indexer not configured", http.StatusServiceUnavailable)
+		return
+	}
 	go func() {
-		// In a real deploy, write progress to a status table or log.
+		ctx := context.Background()
+		log.Printf("reindex: starting (triggered by API)")
+		res, err := s.Indexer.IndexAll(ctx)
+		if err != nil {
+			log.Printf("reindex: failed: %v", err)
+			return
+		}
+		log.Printf("reindex: done scriptures=%d talks=%d manuals=%d study_aids=%d books=%d skipped=%d errors=%d",
+			res.ScripturesIndexed, res.TalksIndexed, res.ManualsIndexed,
+			res.StudyAidsIndexed, res.BooksIndexed, res.Skipped, res.Errors)
 	}()
 	w.WriteHeader(http.StatusAccepted)
 	w.Write([]byte(`{"status":"started"}`))
