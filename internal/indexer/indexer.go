@@ -39,6 +39,7 @@ type Result struct {
 	ChaptersIndexed   int
 	TalksIndexed      int
 	ManualsIndexed    int
+	StudyAidsIndexed  int
 	BooksIndexed      int
 	Skipped           int
 	Errors            int
@@ -185,14 +186,28 @@ var scriptureVolumes = map[string]bool{
 	"ot": true, "nt": true, "bofm": true, "dc-testament": true, "pgp": true,
 }
 
+// studyAidTypes are non-scripture sub-volumes under eng/scriptures/ that
+// get indexed into the study_aids table (Phase 1.5e). Adding a new type
+// requires a CHECK-constraint migration on study_aids.aid_type.
+var studyAidTypes = map[string]bool{
+	"tg": true, "bd": true, "gs": true, "jst": true,
+}
+
 func (idx *Indexer) indexScriptureFile(ctx context.Context, path string, parts []string, r *Result) error {
-	// eng/scriptures/{volume}/{book}/{chapter}.md
-	if len(parts) < 5 {
+	// eng/scriptures/{volume}/...
+	if len(parts) < 4 {
 		return nil
 	}
 	volume := parts[2]
+	if studyAidTypes[volume] {
+		return idx.indexStudyAidFile(ctx, path, parts, r)
+	}
+	// Scripture volumes are layout: eng/scriptures/{volume}/{book}/{chapter}.md
 	if !scriptureVolumes[volume] {
-		return nil // skip study aids: tg, bd, gs, jst — Phase 2
+		return nil
+	}
+	if len(parts) < 5 {
+		return nil
 	}
 	book := parts[3]
 	chapterStr := strings.TrimSuffix(parts[4], ".md")
@@ -237,6 +252,57 @@ func (idx *Indexer) indexScriptureFile(ctx context.Context, path string, parts [
 		}
 		r.ScripturesIndexed++
 	}
+	return nil
+}
+
+// indexStudyAidFile upserts a TG/BD/GS/JST entry into study_aids.
+//
+// Path layouts:
+//
+//	eng/scriptures/tg/{slug}.md           (parts len 4)
+//	eng/scriptures/bd/{slug}.md           (parts len 4)
+//	eng/scriptures/gs/{slug}.md           (parts len 4)
+//	eng/scriptures/jst/{book}/{slug}.md   (parts len 5)
+//
+// Slug is the path under the aid root, joined with '/' and stripped of '.md'.
+// Title comes from the first H1; we fall back to the slug if the file has none.
+// Body is stored verbatim (markdown links preserved — TG entries are mostly
+// link lists; stripping them would destroy the value).
+func (idx *Indexer) indexStudyAidFile(ctx context.Context, path string, parts []string, r *Result) error {
+	if len(parts) < 4 {
+		return nil
+	}
+	aidType := parts[2]
+	// Slug = remaining path under aid root, without .md
+	slugParts := parts[3:]
+	slug := strings.TrimSuffix(strings.Join(slugParts, "/"), ".md")
+	if slug == "" {
+		return nil
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	full := string(body)
+
+	title := firstHeading(full)
+	if title == "" {
+		title = slug
+	}
+
+	if _, err := idx.DB.Pool.Exec(ctx, `
+		INSERT INTO study_aids (aid_type, slug, title, content, file_path)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (file_path) DO UPDATE
+		SET aid_type = EXCLUDED.aid_type,
+		    slug     = EXCLUDED.slug,
+		    title    = EXCLUDED.title,
+		    content  = EXCLUDED.content
+	`, aidType, slug, title, full, path); err != nil {
+		return fmt.Errorf("upsert study aid: %w", err)
+	}
+	r.StudyAidsIndexed++
 	return nil
 }
 
