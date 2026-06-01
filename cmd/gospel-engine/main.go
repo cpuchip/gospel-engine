@@ -48,15 +48,21 @@ func run() error {
 	log.Printf("db connected; schema migrations applied")
 
 	// --- Embedding client (best-effort) ---
+	// The client is always constructed and kept so /api/health can live-ping the
+	// backend. Whether semantic search is *enabled* for queries is decided here
+	// by a startup ping: searchEmbed is nil when the backend is unreachable at
+	// boot, which gates semantic off until the next restart.
 	embedder := embed.New(cfg.EmbeddingURL, cfg.EmbeddingModel, cfg.EmbedRequestTimeo)
 	pingCtx, pingCancel := context.WithTimeout(rootCtx, 5*time.Second)
-	if err := embedder.Ping(pingCtx); err != nil {
-		log.Printf("WARN: embedding server unreachable (%v) — keyword search will work, semantic will not", err)
-		embedder = nil
-	} else {
-		log.Printf("embedding server OK (model=%s)", cfg.EmbeddingModel)
-	}
+	embedOK := embedder.Ping(pingCtx) == nil
 	pingCancel()
+	var searchEmbed *embed.Client
+	if embedOK {
+		searchEmbed = embedder
+		log.Printf("embedding server OK (model=%s)", cfg.EmbeddingModel)
+	} else {
+		log.Printf("WARN: embedding server unreachable — keyword search will work, semantic will not (model=%s)", cfg.EmbeddingModel)
+	}
 
 	// --- Indexer (always constructed; backgrounded only when configured) ---
 	idx := indexer.New(database, cfg.GospelLibraryPath, cfg.BooksPath)
@@ -76,7 +82,7 @@ func run() error {
 			}
 
 			// --- Embedding pass (only if embedder is healthy and bulk loading is enabled) ---
-			if embedder != nil && cfg.BulkLoadEmbeds {
+			if embedOK && cfg.BulkLoadEmbeds {
 				log.Printf("embed pass starting")
 				eres, err := idx.EmbedAll(rootCtx, embedder)
 				if err != nil {
@@ -86,7 +92,7 @@ func run() error {
 					log.Printf("embed pass done: verses=%d paragraphs=%d errors=%d (%s)",
 						eres.Verses, eres.Paragraphs, eres.Errors, eres.Duration)
 				}
-			} else if embedder == nil {
+			} else if !embedOK {
 				log.Printf("embed pass skipped: embedding server unavailable")
 			} else {
 				log.Printf("embed pass skipped: BULK_LOAD_EMBEDDINGS=false")
@@ -98,7 +104,8 @@ func run() error {
 	srv := &api.Server{
 		Cfg:      cfg,
 		DB:       database,
-		Searcher: search.NewSearcher(database, embedder),
+		Searcher: search.NewSearcher(database, searchEmbed),
+		Embed:    embedder,
 		Indexer:  idx,
 		Started:  time.Now(),
 	}

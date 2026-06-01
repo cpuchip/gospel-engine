@@ -16,6 +16,7 @@ import (
 	"github.com/cpuchip/gospel-engine/internal/auth"
 	"github.com/cpuchip/gospel-engine/internal/config"
 	"github.com/cpuchip/gospel-engine/internal/db"
+	"github.com/cpuchip/gospel-engine/internal/embed"
 	"github.com/cpuchip/gospel-engine/internal/indexer"
 	"github.com/cpuchip/gospel-engine/internal/search"
 	"github.com/go-chi/chi/v5"
@@ -30,6 +31,7 @@ type Server struct {
 	Cfg      *config.Config
 	DB       *db.DB
 	Searcher *search.Searcher
+	Embed    *embed.Client    // always set (even when semantic is disabled for search); used for live health pings
 	Indexer  *indexer.Indexer // optional; required for /api/admin/reparse-speakers
 	Started  time.Time
 }
@@ -90,11 +92,30 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if err := s.DB.Pool.Ping(r.Context()); err != nil {
 		dbOK = false
 	}
+
+	// Embedding status. `enabled` is the startup decision that gates semantic
+	// search for queries (false => keyword/hybrid still work, semantic errors).
+	// `reachable` is a live ping of the backend right now. The two disagreeing
+	// (reachable=true, enabled=false) means the backend recovered and the
+	// server needs a restart to re-enable semantic.
+	embedEnabled := s.Searcher != nil && s.Searcher.Embed != nil
+	embedReachable := false
+	if s.Embed != nil {
+		pingCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		embedReachable = s.Embed.Ping(pingCtx) == nil
+		cancel()
+	}
+
 	out := map[string]any{
 		"status":  "ok",
 		"version": s.Cfg.Version,
 		"uptime":  time.Since(s.Started).String(),
 		"db_ok":   dbOK,
+		"embedding": map[string]any{
+			"enabled":   embedEnabled,
+			"reachable": embedReachable,
+			"model":     s.Cfg.EmbeddingModel,
+		},
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -304,9 +325,9 @@ func (s *Server) getChapter(w http.ResponseWriter, r *http.Request, queryRef str
 		 FROM chapters WHERE book = $1 AND chapter = $2 LIMIT 1`,
 		p.Book, p.Chapter)
 	var (
-		id                                              int64
-		volume, book, title, fullContent, filePath      string
-		chapter                                         int
+		id                                         int64
+		volume, book, title, fullContent, filePath string
+		chapter                                    int
 	)
 	if err := row.Scan(&id, &volume, &book, &chapter, &title, &fullContent, &filePath); err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -631,6 +652,7 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 	w.Write([]byte(`{"status":"started"}`))
 }
+
 // handleReparseSpeakers re-runs the talk-header parser against the on-disk
 // markdown for every row in the talks table, updating speaker when the new
 // value differs and is not a known-bad shape. Synchronous (the work is text
@@ -654,6 +676,7 @@ func (s *Server) handleReparseSpeakers(w http.ResponseWriter, r *http.Request) {
 		"duration_ms": res.Duration.Milliseconds(),
 	})
 }
+
 // ============================================================================
 // helpers
 // ============================================================================
