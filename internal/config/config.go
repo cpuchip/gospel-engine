@@ -21,7 +21,11 @@ type Config struct {
 
 	// Content paths (mounted read-only into container)
 	GospelLibraryPath string // /data/gospel-library
-	BooksPath         string // /data/books
+	// LinkMode controls how search results reference their source:
+	// "web" (canonical churchofjesuschrist.org URL only), "fs" (file_path only),
+	// or "both" (default). Env GOSPEL_LINK_MODE.
+	LinkMode  string
+	BooksPath string // /data/books
 	EmbeddingsPath    string // /data/embeddings (pre-computed JSONL files)
 
 	// MCP binaries served at /download/gospel-mcp-{os}-{arch}
@@ -46,6 +50,7 @@ func Load() (*Config, error) {
 		EmbeddingURL:      env("EMBEDDING_URL", "http://localhost:1234/v1"),
 		EmbeddingModel:    env("EMBEDDING_MODEL", "nomic-embed-text-v1.5"),
 		GospelLibraryPath: env("GOSPEL_LIBRARY_PATH", "/data/gospel-library"),
+		LinkMode:          env("GOSPEL_LINK_MODE", "both"),
 		BooksPath:         env("BOOKS_PATH", "/data/books"),
 		EmbeddingsPath:    env("EMBEDDINGS_PATH", "/data/embeddings"),
 		MCPBinariesPath:   env("MCP_BINARIES_PATH", "/opt/mcp-binaries"),

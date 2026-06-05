@@ -39,7 +39,8 @@ type Result struct {
 	Title      string  `json:"title,omitempty"`
 	Reference  string  `json:"reference,omitempty"`
 	Snippet    string  `json:"snippet"`
-	FilePath   string  `json:"file_path"`
+	FilePath   string  `json:"file_path,omitempty"`
+	WebURL     string  `json:"web_url,omitempty"`
 	Score      float64 `json:"score"`
 	Speaker    string  `json:"speaker,omitempty"`
 	Year       int     `json:"year,omitempty"`
@@ -52,11 +53,16 @@ type Result struct {
 type Searcher struct {
 	DB    *db.DB
 	Embed *embed.Client // may be nil (semantic disabled)
+	// LinkMode controls how a result's source is referenced: "web" (canonical
+	// churchofjesuschrist.org URL only), "fs" (file_path only), or "both"
+	// (default — both fields). LibraryPath is kept for future path-based needs.
+	LinkMode    string
+	LibraryPath string
 }
 
-// NewSearcher constructs a Searcher.
-func NewSearcher(d *db.DB, e *embed.Client) *Searcher {
-	return &Searcher{DB: d, Embed: e}
+// NewSearcher constructs a Searcher. linkMode is "web" | "fs" | "both" ("" = both).
+func NewSearcher(d *db.DB, e *embed.Client, linkMode, libraryPath string) *Searcher {
+	return &Searcher{DB: d, Embed: e, LinkMode: linkMode, LibraryPath: libraryPath}
 }
 
 // Options are the search parameters from the API caller.
@@ -67,8 +73,61 @@ type Options struct {
 	Limit   int
 }
 
-// Search runs the requested search and returns merged, sorted results.
+// Search runs the requested search, then decorates each result's source links
+// according to LinkMode (web URL / file path / both).
 func (s *Searcher) Search(ctx context.Context, opt Options) ([]Result, error) {
+	res, err := s.searchRaw(ctx, opt)
+	if err != nil {
+		return nil, err
+	}
+	return s.decorate(res), nil
+}
+
+// decorate applies LinkMode to each result's source reference.
+func (s *Searcher) decorate(res []Result) []Result {
+	if s.LinkMode == "fs" {
+		return res // file_path only — no web URL
+	}
+	for i := range res {
+		if u := webURLFromFilePath(res[i].FilePath); u != "" {
+			res[i].WebURL = u
+		}
+		if s.LinkMode == "web" {
+			res[i].FilePath = "" // surface only the canonical web URL
+		}
+	}
+	return res
+}
+
+// webURLFromFilePath maps a gospel-library markdown path to its canonical
+// churchofjesuschrist.org study URL: <lang>/<study-path>.md →
+// .../study/<study-path>?lang=<lang> (e.g. eng/scriptures/bofm/mosiah/2.md →
+// https://www.churchofjesuschrist.org/study/scriptures/bofm/mosiah/2?lang=eng).
+// Returns "" for paths outside gospel-library (e.g. books), which have no
+// canonical web home — works whether the path is absolute or relative.
+func webURLFromFilePath(fp string) string {
+	// Books (and other non-gospel-library sources) have no canonical web home.
+	if fp == "" || strings.Contains(fp, "/books/") || strings.HasPrefix(fp, "books/") {
+		return ""
+	}
+	// Reduce to "<lang>/<study-path>.md", whether the path was absolute
+	// (…/gospel-library/eng/…) or already relative (eng/…).
+	const marker = "gospel-library/"
+	if i := strings.Index(fp, marker); i >= 0 {
+		fp = fp[i+len(marker):]
+	} else {
+		fp = strings.TrimPrefix(fp, "/")
+	}
+	p := strings.TrimSuffix(fp, ".md")
+	parts := strings.SplitN(p, "/", 2)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return ""
+	}
+	return "https://www.churchofjesuschrist.org/study/" + parts[1] + "?lang=" + parts[0]
+}
+
+// searchRaw runs the requested search and returns merged, sorted results.
+func (s *Searcher) searchRaw(ctx context.Context, opt Options) ([]Result, error) {
 	if opt.Limit <= 0 || opt.Limit > 100 {
 		opt.Limit = 20
 	}

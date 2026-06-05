@@ -104,7 +104,7 @@ func run() error {
 	srv := &api.Server{
 		Cfg:      cfg,
 		DB:       database,
-		Searcher: search.NewSearcher(database, searchEmbed),
+		Searcher: search.NewSearcher(database, searchEmbed, cfg.LinkMode, cfg.GospelLibraryPath),
 		Embed:    embedder,
 		Indexer:  idx,
 		Started:  time.Now(),
