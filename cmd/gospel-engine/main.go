@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/cpuchip/gospel-engine/internal/db"
 	"github.com/cpuchip/gospel-engine/internal/embed"
 	"github.com/cpuchip/gospel-engine/internal/indexer"
+	"github.com/cpuchip/gospel-engine/internal/mcpserver"
 	"github.com/cpuchip/gospel-engine/internal/search"
 )
 
@@ -109,9 +111,26 @@ func run() error {
 		Indexer:  idx,
 		Started:  time.Now(),
 	}
+	apiRouter := srv.Router()
+
+	// MCP-over-HTTP at /mcp (streamable HTTP) — lets a remote bridge dial
+	// gospel-engine directly, exa-search / dnd-tools style, with no local
+	// stdio binary. Tools proxy in-process to the same router above, so
+	// semantic search and all JSON shapes match the REST API exactly. The
+	// endpoint is gated by ?key=<GOSPEL_MCP_KEY>; if the key is unset the
+	// endpoint stays mounted but rejects every request (fail closed).
+	mcpSrv := mcpserver.New(apiRouter, cfg.Version)
+	mcpKey := os.Getenv("GOSPEL_MCP_KEY")
+	if mcpKey == "" {
+		log.Printf("WARN: GOSPEL_MCP_KEY unset — /mcp endpoint will reject all requests (fail closed)")
+	} else {
+		log.Printf("MCP-over-HTTP enabled at /mcp (key-gated)")
+	}
+	rootHandler := mountMCP(apiRouter, mcpSrv.HTTPHandler(), mcpKey)
+
 	httpSrv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           srv.Router(),
+		Handler:           rootHandler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -132,4 +151,24 @@ func run() error {
 		return fmt.Errorf("listen: %w", err)
 	}
 	return nil
+}
+
+// mountMCP returns a handler that routes /mcp* to the streamable-HTTP MCP
+// handler (gated by ?key=) and everything else to the API router. The auth
+// model mirrors dnd-tools: the bridge's http transport carries the key in the
+// URL (?key=...), like exa-search. An empty key fails closed — every /mcp
+// request is rejected — so a misconfigured deploy never exposes the tools
+// unauthenticated.
+func mountMCP(apiRouter, mcpHandler http.Handler, key string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/mcp" || strings.HasPrefix(r.URL.Path, "/mcp/") {
+			if key == "" || r.URL.Query().Get("key") != key {
+				http.Error(w, `{"error":"missing or invalid key"}`, http.StatusUnauthorized)
+				return
+			}
+			mcpHandler.ServeHTTP(w, r)
+			return
+		}
+		apiRouter.ServeHTTP(w, r)
+	})
 }

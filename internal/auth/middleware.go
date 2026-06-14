@@ -12,15 +12,29 @@ import (
 type contextKey string
 
 const (
-	tokenContextKey contextKey = "api_token"
+	tokenContextKey    contextKey = "api_token"
+	internalTrustedKey contextKey = "internal_trusted"
 )
+
+// WithInternalTrusted marks a context as pre-authorized, so an in-process call
+// to the router (e.g. from the MCP-over-HTTP tool handlers, which carry their
+// own ?key= gate at /mcp) skips bearer validation. It must only ever be set on
+// requests the server constructs itself — never derived from inbound headers.
+func WithInternalTrusted(ctx context.Context) context.Context {
+	return context.WithValue(ctx, internalTrustedKey, true)
+}
+
+func isInternalTrusted(ctx context.Context) bool {
+	v, _ := ctx.Value(internalTrustedKey).(bool)
+	return v
+}
 
 // Middleware returns an HTTP middleware that validates `Authorization: Bearer stdy_…`.
 // devMode bypasses auth entirely (local testing only).
 func Middleware(database *db.DB, devMode bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if devMode {
+			if devMode || isInternalTrusted(r.Context()) {
 				next.ServeHTTP(w, r)
 				return
 			}
