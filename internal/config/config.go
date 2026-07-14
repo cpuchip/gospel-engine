@@ -24,9 +24,9 @@ type Config struct {
 	// LinkMode controls how search results reference their source:
 	// "web" (canonical churchofjesuschrist.org URL only), "fs" (file_path only),
 	// or "both" (default). Env GOSPEL_LINK_MODE.
-	LinkMode  string
-	BooksPath string // /data/books
-	EmbeddingsPath    string // /data/embeddings (pre-computed JSONL files)
+	LinkMode       string
+	BooksPath      string // /data/books
+	EmbeddingsPath string // /data/embeddings (pre-computed JSONL files)
 
 	// MCP binaries served at /download/gospel-mcp-{os}-{arch}
 	MCPBinariesPath string // /opt/mcp-binaries
@@ -40,7 +40,13 @@ type Config struct {
 	IndexOnStartup    bool
 	BulkLoadEmbeds    bool
 	EmbedRequestTimeo time.Duration
-	DevMode           bool // disables auth — local dev only
+	// EmbedReprobe is the minimum interval between recovery re-probes of the
+	// embedding backend when semantic search is gated off (backend was down at
+	// boot, or a prior probe failed). A semantic/hybrid request re-probes at most
+	// once per interval and enables semantic on success — so the backend
+	// recovering never requires a process restart. Env EMBED_REPROBE_SECONDS.
+	EmbedReprobe time.Duration
+	DevMode      bool // disables auth — local dev only
 }
 
 func Load() (*Config, error) {
@@ -59,6 +65,7 @@ func Load() (*Config, error) {
 		IndexOnStartup:    envBool("INDEX_ON_STARTUP", true),
 		BulkLoadEmbeds:    envBool("BULK_LOAD_EMBEDDINGS", true),
 		EmbedRequestTimeo: time.Duration(envInt("EMBED_TIMEOUT_SECONDS", 60)) * time.Second,
+		EmbedReprobe:      time.Duration(envInt("EMBED_REPROBE_SECONDS", 60)) * time.Second,
 		DevMode:           envBool("DEV_MODE", false),
 	}
 	if c.DatabaseURL == "" {

@@ -93,12 +93,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		dbOK = false
 	}
 
-	// Embedding status. `enabled` is the startup decision that gates semantic
-	// search for queries (false => keyword/hybrid still work, semantic errors).
-	// `reachable` is a live ping of the backend right now. The two disagreeing
-	// (reachable=true, enabled=false) means the backend recovered and the
-	// server needs a restart to re-enable semantic.
-	embedEnabled := s.Searcher != nil && s.Searcher.Embed != nil
+	// Embedding status. `enabled` is the live gate that decides whether semantic
+	// search runs for queries (false => keyword/hybrid still work, semantic
+	// errors). `reachable` is an independent fresh ping of the backend right now.
+	// If they disagree (reachable=true, enabled=false) the gate is stale but
+	// self-healing: the next semantic/hybrid query re-probes and enables semantic
+	// automatically — no restart needed.
+	embedEnabled := s.Searcher != nil && s.Searcher.SemanticEnabled()
 	embedReachable := false
 	if s.Embed != nil {
 		pingCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)

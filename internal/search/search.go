@@ -5,7 +5,10 @@ package search
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/cpuchip/gospel-engine/internal/db"
 	"github.com/cpuchip/gospel-engine/internal/embed"
@@ -51,8 +54,24 @@ type Result struct {
 
 // Searcher orchestrates keyword + semantic search.
 type Searcher struct {
-	DB    *db.DB
-	Embed *embed.Client // may be nil (semantic disabled)
+	DB *db.DB
+
+	// embed is the embeddings client, retained even while semantic search is
+	// gated off so the gate below can re-probe the backend and recover without a
+	// process restart. Nil only when no embedding backend is configured at all.
+	embed *embed.Client
+
+	// Semantic gate. embedEnabled latches true once the backend answers a probe;
+	// from then on semantic search runs directly. While it is false, a semantic
+	// or hybrid request re-probes the backend at most once per reprobeCooldown and
+	// enables the gate on success — so a backend that was down at boot recovers on
+	// the query cadence instead of needing a restart. Guarded by embedMu because
+	// /api/search is served concurrently.
+	embedMu         sync.Mutex
+	embedEnabled    bool
+	lastProbe       time.Time
+	reprobeCooldown time.Duration
+
 	// LinkMode controls how a result's source is referenced: "web" (canonical
 	// churchofjesuschrist.org URL only), "fs" (file_path only), or "both"
 	// (default — both fields). LibraryPath is kept for future path-based needs.
@@ -60,9 +79,72 @@ type Searcher struct {
 	LibraryPath string
 }
 
-// NewSearcher constructs a Searcher. linkMode is "web" | "fs" | "both" ("" = both).
-func NewSearcher(d *db.DB, e *embed.Client, linkMode, libraryPath string) *Searcher {
-	return &Searcher{DB: d, Embed: e, LinkMode: linkMode, LibraryPath: libraryPath}
+// NewSearcher constructs a Searcher. e is the embeddings client (nil only when
+// no embedding backend is configured). embedEnabled is the caller's startup
+// probe result: true means semantic search is live immediately, false means it
+// is gated off until a re-probe succeeds. reprobeCooldown is the minimum
+// interval between recovery re-probes while the gate is off (<=0 defaults to
+// 60s). linkMode is "web" | "fs" | "both" ("" = both).
+func NewSearcher(d *db.DB, e *embed.Client, embedEnabled bool, reprobeCooldown time.Duration, linkMode, libraryPath string) *Searcher {
+	if reprobeCooldown <= 0 {
+		reprobeCooldown = 60 * time.Second
+	}
+	return &Searcher{
+		DB:              d,
+		embed:           e,
+		embedEnabled:    embedEnabled,
+		reprobeCooldown: reprobeCooldown,
+		LinkMode:        linkMode,
+		LibraryPath:     libraryPath,
+	}
+}
+
+// SemanticEnabled reports whether semantic search is currently live. Thread-safe.
+// /api/health reads this, so the health endpoint reflects the live gate state:
+// enabled flips true after a recovery re-probe, with no restart.
+func (s *Searcher) SemanticEnabled() bool {
+	s.embedMu.Lock()
+	defer s.embedMu.Unlock()
+	return s.embedEnabled
+}
+
+// semanticClient returns the embeddings client to use for a semantic query, or
+// nil when semantic search is unavailable. When the gate is off it lazily
+// re-probes the backend at most once per reprobeCooldown; a successful probe
+// latches the gate on so every later query uses semantic directly. Thread-safe:
+// under a burst of concurrent requests only one probe fires per cooldown, and
+// the network round-trip happens outside the lock so it never blocks other
+// searches (they observe the cooldown and skip).
+func (s *Searcher) semanticClient(ctx context.Context) *embed.Client {
+	s.embedMu.Lock()
+	if s.embedEnabled {
+		c := s.embed
+		s.embedMu.Unlock()
+		return c
+	}
+	if s.embed == nil {
+		s.embedMu.Unlock()
+		return nil
+	}
+	if !s.lastProbe.IsZero() && time.Since(s.lastProbe) < s.reprobeCooldown {
+		s.embedMu.Unlock()
+		return nil // still cooling down since the last failed probe
+	}
+	s.lastProbe = time.Now() // claim this cooldown window before releasing the lock
+	client := s.embed
+	s.embedMu.Unlock()
+
+	if err := client.Ping(ctx); err != nil {
+		return nil // backend still down; next request retries after the cooldown
+	}
+	s.embedMu.Lock()
+	alreadyOn := s.embedEnabled
+	s.embedEnabled = true
+	s.embedMu.Unlock()
+	if !alreadyOn {
+		log.Printf("semantic search re-enabled: embedding backend recovered")
+	}
+	return client
 }
 
 // Options are the search parameters from the API caller.
@@ -142,19 +224,21 @@ func (s *Searcher) searchRaw(ctx context.Context, opt Options) ([]Result, error)
 	case ModeKeyword:
 		return s.keyword(ctx, opt)
 	case ModeSemantic:
-		if s.Embed == nil {
-			return nil, fmt.Errorf("semantic search disabled (no embedding client)")
+		client := s.semanticClient(ctx)
+		if client == nil {
+			return nil, fmt.Errorf("semantic search disabled (embedding backend unavailable)")
 		}
-		return s.semantic(ctx, opt)
+		return s.semantic(ctx, client, opt)
 	case ModeHybrid:
 		kw, err := s.keyword(ctx, opt)
 		if err != nil {
 			return nil, fmt.Errorf("keyword: %w", err)
 		}
-		if s.Embed == nil {
+		client := s.semanticClient(ctx)
+		if client == nil {
 			return kw, nil
 		}
-		sem, err := s.semantic(ctx, opt)
+		sem, err := s.semantic(ctx, client, opt)
 		if err != nil {
 			// Fall back to keyword-only on semantic failure.
 			return kw, nil
@@ -315,9 +399,10 @@ func (s *Searcher) keyword(ctx context.Context, opt Options) ([]Result, error) {
 }
 
 // semantic runs a single nearest-neighbor query against the embeddings table,
-// then enriches each row with metadata from the appropriate source table.
-func (s *Searcher) semantic(ctx context.Context, opt Options) ([]Result, error) {
-	vec, err := s.Embed.Embed(ctx, opt.Query)
+// then enriches each row with metadata from the appropriate source table. The
+// caller passes the embeddings client resolved by semanticClient (never nil).
+func (s *Searcher) semantic(ctx context.Context, client *embed.Client, opt Options) ([]Result, error) {
+	vec, err := client.Embed(ctx, opt.Query)
 	if err != nil {
 		return nil, fmt.Errorf("embedding query: %w", err)
 	}

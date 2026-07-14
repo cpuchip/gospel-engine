@@ -51,19 +51,18 @@ func run() error {
 
 	// --- Embedding client (best-effort) ---
 	// The client is always constructed and kept so /api/health can live-ping the
-	// backend. Whether semantic search is *enabled* for queries is decided here
-	// by a startup ping: searchEmbed is nil when the backend is unreachable at
-	// boot, which gates semantic off until the next restart.
+	// backend and the searcher can re-probe it. A startup ping decides whether
+	// semantic search is enabled *now*: on failure the searcher gates semantic
+	// off, but re-probes on a cadence (EMBED_REPROBE_SECONDS) and enables it
+	// automatically once the backend recovers — no restart required.
 	embedder := embed.New(cfg.EmbeddingURL, cfg.EmbeddingModel, cfg.EmbedRequestTimeo)
 	pingCtx, pingCancel := context.WithTimeout(rootCtx, 5*time.Second)
 	embedOK := embedder.Ping(pingCtx) == nil
 	pingCancel()
-	var searchEmbed *embed.Client
 	if embedOK {
-		searchEmbed = embedder
 		log.Printf("embedding server OK (model=%s)", cfg.EmbeddingModel)
 	} else {
-		log.Printf("WARN: embedding server unreachable — keyword search will work, semantic will not (model=%s)", cfg.EmbeddingModel)
+		log.Printf("WARN: embedding server unreachable at boot — keyword search works now; semantic will re-probe every %s and enable itself once the backend recovers (model=%s)", cfg.EmbedReprobe, cfg.EmbeddingModel)
 	}
 
 	// --- Indexer (always constructed; backgrounded only when configured) ---
@@ -106,7 +105,7 @@ func run() error {
 	srv := &api.Server{
 		Cfg:      cfg,
 		DB:       database,
-		Searcher: search.NewSearcher(database, searchEmbed, cfg.LinkMode, cfg.GospelLibraryPath),
+		Searcher: search.NewSearcher(database, embedder, embedOK, cfg.EmbedReprobe, cfg.LinkMode, cfg.GospelLibraryPath),
 		Embed:    embedder,
 		Indexer:  idx,
 		Started:  time.Now(),
