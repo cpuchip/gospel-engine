@@ -92,3 +92,21 @@ func firstNonEmptyLineAfterTitle(s string) string {
 	}
 	return ""
 }
+
+// looksLikeStoredGarbage identifies DB speaker values that are residue from
+// older parser versions rather than names: heading prefixes ("## Narrator:"),
+// audio-link lines, URLs, or captured prose. Used by ReparseSpeakers to decide
+// when an EMPTY re-parse may clear a stored value — garbage is the only thing
+// empty is allowed to replace.
+func looksLikeStoredGarbage(speaker string) bool {
+	if strings.HasPrefix(speaker, "#") {
+		return true
+	}
+	if strings.Contains(speaker, "Listen to Audio") || strings.HasPrefix(speaker, "🎧") {
+		return true
+	}
+	if strings.Contains(speaker, "http://") || strings.Contains(speaker, "https://") {
+		return true
+	}
+	return len(speaker) > 120
+}

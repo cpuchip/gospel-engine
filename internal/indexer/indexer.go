@@ -511,8 +511,12 @@ func parseTalkHeader(s string) (title, speaker, content string) {
 			//   ([Doctrine and Covenants 121:29](../../...))
 			continue
 		}
-		if strings.HasPrefix(t, "# ") {
-			// duplicated title; skip
+		if strings.HasPrefix(t, "#") {
+			// Any heading is structure, not a speaker: the duplicated-H1
+			// case, and (found by the 2026-08 full-corpus sweep) pageant
+			// talks whose first line is "## Narrator: …" — the old "# "
+			// prefix check let those through and stored the heading, hash
+			// marks and all, as the speaker.
 			continue
 		}
 		// Candidate speaker line.
@@ -525,6 +529,15 @@ func parseTalkHeader(s string) (title, speaker, content string) {
 			if strings.HasPrefix(lower, "by ") {
 				cleaned = strings.TrimSpace(cleaned[3:])
 			}
+		}
+		// Plausibility gate (2026-08 sweep): a handful of documents have no
+		// speaker at all — proclamations, annual reports, video segments —
+		// and the first prose sentence landed here. A name is short; if the
+		// candidate is implausibly long it is prose, and the honest answer
+		// is "" (the caller already treats empty as not-found and keeps any
+		// existing DB value). The line stays in the content in that case.
+		if len(cleaned) > 100 {
+			break
 		}
 		if cleaned != "" {
 			speaker = cleaned

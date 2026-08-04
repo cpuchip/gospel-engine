@@ -68,6 +68,20 @@ func (idx *Indexer) ReparseSpeakers(ctx context.Context) (*ReparseResult, error)
 		_, newSpeaker, _ := parseTalkHeader(string(body))
 
 		if looksLikeSpeakerFailure(newSpeaker) {
+			// An empty result normally never overwrites — an existing NAME
+			// beats a parse miss. But when the STORED value is itself
+			// residue from an older parser (heading prefixes, audio links,
+			// captured prose), keeping it means garbage is immortal: the
+			// 2026-08 full-corpus sweep found four such rows. Empty may
+			// replace garbage; it still never replaces a plausible name.
+			if newSpeaker == "" && looksLikeStoredGarbage(t.speaker) {
+				if _, err := idx.DB.Pool.Exec(ctx,
+					`UPDATE talks SET speaker = '' WHERE id = $1`, t.id); err != nil {
+					return res, fmt.Errorf("clear talk %d: %w", t.id, err)
+				}
+				res.Changed++
+				continue
+			}
 			res.Failed++
 			idx.logSpeakerFailure(t.filePath, string(body), newSpeaker)
 			continue
