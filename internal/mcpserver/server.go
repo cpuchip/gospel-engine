@@ -68,11 +68,28 @@ func (s *Server) callAPI(ctx context.Context, path string) (string, error) {
 	return string(body), nil
 }
 
+// readOnlyAnnotations marks a tool as a read-only lookup in the engine's own
+// corpus. Without it the MCP library advertises every tool as destructive and
+// open-world, which makes clients ask for approval on harmless searches.
+func readOnlyAnnotations() mcp.ToolOption {
+	return func(t *mcp.Tool) {
+		for _, opt := range []mcp.ToolOption{
+			mcp.WithReadOnlyHintAnnotation(true),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
+			mcp.WithOpenWorldHintAnnotation(false),
+		} {
+			opt(t)
+		}
+	}
+}
+
 func (s *Server) register() {
 	// --- gospel_search -------------------------------------------------
 	s.mcp.AddTool(
 		mcp.NewTool("gospel_search",
 			mcp.WithDescription("Search scriptures, conference talks, manuals, books, and study aids (Topical Guide, Bible Dictionary, Guide to the Scriptures, JST excerpts). Modes: keyword (FTS), semantic (vector), hybrid (RRF merge — default)."),
+			readOnlyAnnotations(),
 			mcp.WithString("query", mcp.Required(), mcp.Description("Natural-language search query")),
 			mcp.WithString("mode", mcp.Description("Search mode: keyword | semantic | hybrid (default: hybrid)"),
 				mcp.Enum("keyword", "semantic", "hybrid")),
@@ -115,6 +132,7 @@ func (s *Server) register() {
 				"Set `cross_refs: true` on a single-verse or verse-range query to also "+
 				"receive footnote-derived cross-references. Off by default.\n\n"+
 				"For talks/manuals/books/study_aids, omit `reference` and pass `type` + `id`."),
+			readOnlyAnnotations(),
 			mcp.WithString("reference", mcp.Description("Scripture reference: \"1 Nephi 3:7\", \"D&C 93:24-30\", \"Mosiah 4\".")),
 			mcp.WithString("type", mcp.Description("Record type for id lookups"),
 				mcp.Enum("scriptures", "talks", "manuals", "books", "study_aids")),
@@ -149,6 +167,7 @@ func (s *Server) register() {
 	s.mcp.AddTool(
 		mcp.NewTool("gospel_list",
 			mcp.WithDescription("List available content. type=scriptures returns volume summaries; type=talks lists conference sessions; type=manuals lists collections; type=books lists collections; type=study_aids returns per-aid-type counts (tg/bd/gs/jst); omit type for overall stats."),
+			readOnlyAnnotations(),
 			mcp.WithString("type", mcp.Description("Content type to list (omit for overall stats)"),
 				mcp.Enum("scriptures", "talks", "manuals", "books", "study_aids")),
 		),
