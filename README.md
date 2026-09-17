@@ -1,6 +1,6 @@
 # gospel-engine
 
-A project to contain all the tools needed to make the gospel library come alive with search and index capabilities, this depends on having the gospel library downloaded (see my other repo scripture-study/scripts/gospel-library, a tool to download the gospel-library from the Church of Jesus Christ of Latter-day Saints).
+A project to contain all the tools needed to make the gospel library come alive with search and index capabilities, this depends on having the gospel library downloaded (see [gospel-library-downloader](https://github.com/cpuchip/gospel-library-downloader), a tool to download the Gospel Library from the Church of Jesus Christ of Latter-day Saints into Markdown).
 
 The hosted server runs at **engine.ibeco.me**: a PostgreSQL + pgvector backend with keyword (FTS), semantic (vector), and hybrid search over scriptures, conference talks, manuals, books, and study aids.
 
