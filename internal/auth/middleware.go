@@ -43,6 +43,10 @@ func Middleware(database *db.DB, devMode bool) func(http.Handler) http.Handler {
 				http.Error(w, "missing or invalid Authorization header", http.StatusUnauthorized)
 				return
 			}
+			if !db.LooksLikeAPIToken(raw) {
+				http.Error(w, "invalid token", http.StatusUnauthorized)
+				return
+			}
 			tok, err := database.ValidateAPIToken(r.Context(), raw)
 			if err != nil {
 				http.Error(w, "auth lookup failed", http.StatusInternalServerError)
@@ -52,8 +56,8 @@ func Middleware(database *db.DB, devMode bool) func(http.Handler) http.Handler {
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return
 			}
-			// Best-effort touch (don't block the request).
-			go database.TouchAPIToken(context.Background(), tok.ID)
+			// Best-effort, rate-limited touch (never blocks the request).
+			database.TouchAPITokenIfStale(tok)
 
 			ctx := context.WithValue(r.Context(), tokenContextKey, tok)
 			next.ServeHTTP(w, r.WithContext(ctx))

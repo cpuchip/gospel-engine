@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -112,6 +113,44 @@ func (d *DB) ValidateAPIToken(ctx context.Context, raw string) (*APIToken, error
 		}
 	}
 	return nil, nil
+}
+
+// LooksLikeAPIToken reports whether raw has the exact shape CreateAPIToken
+// produces: TokenPrefix followed by 64 lowercase hex characters. Callers use it
+// to reject malformed input before any database round trip.
+func LooksLikeAPIToken(raw string) bool {
+	if len(raw) != len(TokenPrefix)+64 || !strings.HasPrefix(raw, TokenPrefix) {
+		return false
+	}
+	for i := len(TokenPrefix); i < len(raw); i++ {
+		c := raw[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// touchInterval is the minimum spacing between last_used writes for one token.
+const touchInterval = time.Minute
+
+// touchDue reports whether a token last used at lastUsed should be touched now.
+func touchDue(lastUsed *time.Time, now time.Time) bool {
+	return lastUsed == nil || now.Sub(*lastUsed) >= touchInterval
+}
+
+// TouchAPITokenIfStale records last_used at most once per touchInterval, in the
+// background with a short timeout, so a chatty client or a stalled database
+// cannot pile up one goroutine per request.
+func (d *DB) TouchAPITokenIfStale(tok *APIToken) {
+	if tok == nil || !touchDue(tok.LastUsed, time.Now()) {
+		return
+	}
+	go func(id int64) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		d.TouchAPIToken(ctx, id)
+	}(tok.ID)
 }
 
 // TouchAPIToken updates last_used. Errors are swallowed — best-effort.

@@ -2,7 +2,9 @@
 //
 // Usage (inside the running container):
 //
-//	/app/gospel-engine bootstrap-token --name "service" [--user michael] [--rate-limit 600]
+//	gospel-engine bootstrap-token --name "service" [--user michael] [--rate-limit 600] [--expires-in-days 90]
+//
+// The binary is /usr/local/bin/gospel-engine in the image (on PATH).
 //
 // Connects to the same DB the server uses, mints a new bearer token, and
 // prints the raw secret to stdout exactly once. Safe to run multiple times

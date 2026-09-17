@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log"
 	"net/http"
@@ -116,21 +117,33 @@ func run() error {
 	// gospel-engine directly, exa-search / dnd-tools style, with no local
 	// stdio binary. Tools proxy in-process to the same router above, so
 	// semantic search and all JSON shapes match the REST API exactly. The
-	// endpoint is gated by ?key=<GOSPEL_MCP_KEY>; if the key is unset the
-	// endpoint stays mounted but rejects every request (fail closed).
+	// endpoint accepts a live stdy_ API token or the legacy GOSPEL_MCP_KEY, via
+	// ?key= or an Authorization: Bearer header; see mountMCP.
 	mcpSrv := mcpserver.New(apiRouter, cfg.Version)
 	mcpKey := os.Getenv("GOSPEL_MCP_KEY")
 	if mcpKey == "" {
-		log.Printf("WARN: GOSPEL_MCP_KEY unset — /mcp endpoint will reject all requests (fail closed)")
+		log.Printf("MCP-over-HTTP enabled at /mcp (stdy_ API tokens only; legacy GOSPEL_MCP_KEY unset)")
 	} else {
-		log.Printf("MCP-over-HTTP enabled at /mcp (key-gated)")
+		log.Printf("MCP-over-HTTP enabled at /mcp (key-gated: stdy_ API tokens or legacy GOSPEL_MCP_KEY)")
 	}
-	rootHandler := mountMCP(apiRouter, mcpSrv.HTTPHandler(), mcpKey)
+	validateToken := func(ctx context.Context, raw string) (bool, error) {
+		tok, err := database.ValidateAPIToken(ctx, raw)
+		if err != nil || tok == nil {
+			return false, err
+		}
+		database.TouchAPITokenIfStale(tok)
+		return true, nil
+	}
+	rootHandler := mountMCP(apiRouter, mcpSrv.HTTPHandler(), mcpKey, validateToken)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           rootHandler,
 		ReadHeaderTimeout: 10 * time.Second,
+		// ReadTimeout bounds a stalled request body; Go clears the read deadline
+		// once the body is read, so long-lived MCP streams are unaffected.
+		ReadTimeout: 30 * time.Second,
+		IdleTimeout: 120 * time.Second,
 	}
 
 	// Shutdown plumbing.
@@ -152,22 +165,56 @@ func run() error {
 	return nil
 }
 
+// maxMCPBody caps an MCP request body. JSON-RPC messages here are a few KB.
+const maxMCPBody = 1 << 20
+
+// tokenValidator reports whether raw is a live (unrevoked, unexpired) API token.
+// A non-nil error means the lookup failed, not that the token is invalid.
+type tokenValidator func(ctx context.Context, raw string) (bool, error)
+
 // mountMCP returns a handler that routes /mcp* to the streamable-HTTP MCP
-// handler (gated by ?key=) and everything else to the API router. The auth
-// model mirrors dnd-tools: the bridge's http transport carries the key in the
-// URL (?key=...), like exa-search. An empty key fails closed — every /mcp
-// request is rejected — so a misconfigured deploy never exposes the tools
-// unauthenticated.
-func mountMCP(apiRouter, mcpHandler http.Handler, key string) http.Handler {
+// handler and everything else to the API router. A request to /mcp is let
+// through when its credential is either the legacy shared GOSPEL_MCP_KEY or a
+// live per-user `stdy_` API token (revocable, expirable, same store as the
+// REST bearer tokens). The credential may arrive as ?key=... (remote
+// connectors such as claude.ai can only carry it in the URL) or as an
+// `Authorization: Bearer` header. Everything else fails closed: no credential,
+// an empty one, an unknown one, or an unset legacy key with no valid token is
+// 401; a failed token lookup is 500, never a pass.
+func mountMCP(apiRouter, mcpHandler http.Handler, key string, validate tokenValidator) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/mcp" || strings.HasPrefix(r.URL.Path, "/mcp/") {
-			if key == "" || r.URL.Query().Get("key") != key {
-				http.Error(w, `{"error":"missing or invalid key"}`, http.StatusUnauthorized)
-				return
-			}
-			mcpHandler.ServeHTTP(w, r)
+		if r.URL.Path != "/mcp" && !strings.HasPrefix(r.URL.Path, "/mcp/") {
+			apiRouter.ServeHTTP(w, r)
 			return
 		}
-		apiRouter.ServeHTTP(w, r)
+		serveMCP := func() {
+			// The MCP library reads whole request bodies; cap them.
+			r.Body = http.MaxBytesReader(w, r.Body, maxMCPBody)
+			mcpHandler.ServeHTTP(w, r)
+		}
+		supplied := r.URL.Query().Get("key")
+		if supplied == "" {
+			if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+				supplied = strings.TrimSpace(h[len("Bearer "):])
+			}
+		}
+		switch {
+		case supplied == "":
+			// fall through to reject
+		case key != "" && subtle.ConstantTimeCompare([]byte(supplied), []byte(key)) == 1:
+			serveMCP()
+			return
+		case validate != nil && db.LooksLikeAPIToken(supplied):
+			ok, err := validate(r.Context(), supplied)
+			if err != nil {
+				http.Error(w, `{"error":"auth lookup failed"}`, http.StatusInternalServerError)
+				return
+			}
+			if ok {
+				serveMCP()
+				return
+			}
+		}
+		http.Error(w, `{"error":"missing or invalid key"}`, http.StatusUnauthorized)
 	})
 }
