@@ -43,6 +43,7 @@ func runBootstrapToken() error {
 	user := fs.String("user", "", "Optional external user identifier")
 	rateLimit := fs.Int("rate-limit", 600, "Requests per minute")
 	expiresInDays := fs.Int("expires-in-days", 0, "Token lifetime in days (0 = no expiry)")
+	admin := fs.Bool("admin", false, "Mint an admin token that may call /api/admin/* (mint, list, revoke tokens; reindex). Only this CLI can create admin tokens.")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return err
 	}
@@ -70,7 +71,7 @@ func runBootstrapToken() error {
 		exp = &t
 	}
 
-	tok, raw, err := database.CreateAPIToken(ctx, *user, *name, exp, *rateLimit)
+	tok, raw, err := database.CreateAPIToken(ctx, *user, *name, exp, *rateLimit, *admin)
 	if err != nil {
 		return fmt.Errorf("create token: %w", err)
 	}
@@ -78,6 +79,7 @@ func runBootstrapToken() error {
 	fmt.Printf("OK — token created\n")
 	fmt.Printf("  id          : %d\n", tok.ID)
 	fmt.Printf("  name        : %s\n", tok.Name)
+	fmt.Printf("  admin       : %t\n", tok.IsAdmin)
 	fmt.Printf("  prefix      : %s\n", tok.Prefix)
 	fmt.Printf("  rate_limit  : %d/min\n", tok.RateLimit)
 	if tok.ExpiresAt != nil {

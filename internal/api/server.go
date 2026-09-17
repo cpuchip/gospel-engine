@@ -60,9 +60,10 @@ func (s *Server) Router() http.Handler {
 		g.Get("/api/list", s.handleList)
 	})
 
-	// Admin (also auth-gated; later we'll add a role check).
+	// Admin: authenticated AND an admin token. Ordinary tokens get 403 here.
 	r.Group(func(g chi.Router) {
 		g.Use(auth.Middleware(s.DB, s.Cfg.DevMode))
+		g.Use(auth.RequireAdmin(s.Cfg.DevMode))
 		g.Post("/api/admin/tokens", s.handleCreateToken)
 		g.Get("/api/admin/tokens", s.handleListTokens)
 		g.Delete("/api/admin/tokens/{id}", s.handleRevokeToken)
@@ -589,7 +590,9 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		t := time.Now().UTC().Add(time.Duration(req.ExpiresInDays) * 24 * time.Hour)
 		exp = &t
 	}
-	tok, raw, err := s.DB.CreateAPIToken(r.Context(), req.ExternalUser, req.Name, exp, req.RateLimit)
+	// Tokens minted over the API are never admin, whatever the request says.
+	// Admin tokens come only from the bootstrap-token CLI inside the container.
+	tok, raw, err := s.DB.CreateAPIToken(r.Context(), req.ExternalUser, req.Name, exp, req.RateLimit, false)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return

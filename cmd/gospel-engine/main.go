@@ -50,6 +50,18 @@ func run() error {
 	defer database.Close()
 	log.Printf("db connected; schema migrations applied")
 
+	// Nothing else alerts when no admin token exists: ibeco.me's token pages
+	// would just start failing. Say it loudly at boot.
+	adminCtx, adminCancel := context.WithTimeout(rootCtx, 5*time.Second)
+	if n, err := database.CountLiveAdminTokens(adminCtx); err != nil {
+		log.Printf("WARN: could not count admin tokens: %v", err)
+	} else if n == 0 {
+		log.Printf("WARN: no live admin tokens; /api/admin/* (token minting for ibeco.me, reindex) will refuse every caller. Mint one inside the container: gospel-engine bootstrap-token --admin --name <name>")
+	} else {
+		log.Printf("admin tokens: %d live", n)
+	}
+	adminCancel()
+
 	// --- Embedding client (best-effort) ---
 	// The client is always constructed and kept so /api/health can live-ping the
 	// backend and the searcher can re-probe it. A startup ping decides whether

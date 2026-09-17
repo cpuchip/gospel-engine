@@ -33,11 +33,13 @@ type APIToken struct {
 	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
 	RateLimit    int        `json:"rate_limit"`
 	Revoked      bool       `json:"revoked"`
+	IsAdmin      bool       `json:"is_admin"`
 }
 
 // CreateAPIToken issues a new bearer token. The raw token string is
-// returned exactly once.
-func (d *DB) CreateAPIToken(ctx context.Context, externalUser, name string, expiresAt *time.Time, rateLimit int) (*APIToken, string, error) {
+// returned exactly once. admin must only be true for the container-local
+// bootstrap-token CLI; the HTTP API always passes false.
+func (d *DB) CreateAPIToken(ctx context.Context, externalUser, name string, expiresAt *time.Time, rateLimit int, admin bool) (*APIToken, string, error) {
 	if name == "" {
 		return nil, "", errors.New("token name is required")
 	}
@@ -58,10 +60,10 @@ func (d *DB) CreateAPIToken(ctx context.Context, externalUser, name string, expi
 	}
 
 	row := d.Pool.QueryRow(ctx, `
-		INSERT INTO api_tokens (external_user, name, prefix, token_hash, expires_at, rate_limit)
-		VALUES (NULLIF($1,''), $2, $3, $4, $5, $6)
+		INSERT INTO api_tokens (external_user, name, prefix, token_hash, expires_at, rate_limit, is_admin)
+		VALUES (NULLIF($1,''), $2, $3, $4, $5, $6, $7)
 		RETURNING id, created_at
-	`, externalUser, name, prefix, string(hash), expiresAt, rateLimit)
+	`, externalUser, name, prefix, string(hash), expiresAt, rateLimit, admin)
 
 	t := &APIToken{
 		ExternalUser: externalUser,
@@ -69,6 +71,7 @@ func (d *DB) CreateAPIToken(ctx context.Context, externalUser, name string, expi
 		Prefix:       prefix,
 		ExpiresAt:    expiresAt,
 		RateLimit:    rateLimit,
+		IsAdmin:      admin,
 	}
 	if err := row.Scan(&t.ID, &t.CreatedAt); err != nil {
 		return nil, "", fmt.Errorf("inserting token: %w", err)
@@ -86,7 +89,7 @@ func (d *DB) ValidateAPIToken(ctx context.Context, raw string) (*APIToken, error
 
 	rows, err := d.Pool.Query(ctx, `
 		SELECT id, COALESCE(external_user,''), name, prefix, token_hash,
-		       created_at, last_used, expires_at, rate_limit, revoked
+		       created_at, last_used, expires_at, rate_limit, revoked, is_admin
 		FROM api_tokens
 		WHERE prefix = $1 AND revoked = FALSE
 	`, prefix)
@@ -102,7 +105,7 @@ func (d *DB) ValidateAPIToken(ctx context.Context, raw string) (*APIToken, error
 			hash string
 		)
 		if err := rows.Scan(&t.ID, &t.ExternalUser, &t.Name, &t.Prefix, &hash,
-			&t.CreatedAt, &t.LastUsed, &t.ExpiresAt, &t.RateLimit, &t.Revoked); err != nil {
+			&t.CreatedAt, &t.LastUsed, &t.ExpiresAt, &t.RateLimit, &t.Revoked, &t.IsAdmin); err != nil {
 			return nil, err
 		}
 		if t.ExpiresAt != nil && now.After(*t.ExpiresAt) {
@@ -162,7 +165,7 @@ func (d *DB) TouchAPIToken(ctx context.Context, id int64) {
 func (d *DB) ListAPITokens(ctx context.Context) ([]*APIToken, error) {
 	rows, err := d.Pool.Query(ctx, `
 		SELECT id, COALESCE(external_user,''), name, prefix,
-		       created_at, last_used, expires_at, rate_limit, revoked
+		       created_at, last_used, expires_at, rate_limit, revoked, is_admin
 		FROM api_tokens
 		ORDER BY created_at DESC
 	`)
@@ -175,12 +178,23 @@ func (d *DB) ListAPITokens(ctx context.Context) ([]*APIToken, error) {
 	for rows.Next() {
 		t := &APIToken{}
 		if err := rows.Scan(&t.ID, &t.ExternalUser, &t.Name, &t.Prefix,
-			&t.CreatedAt, &t.LastUsed, &t.ExpiresAt, &t.RateLimit, &t.Revoked); err != nil {
+			&t.CreatedAt, &t.LastUsed, &t.ExpiresAt, &t.RateLimit, &t.Revoked, &t.IsAdmin); err != nil {
 			return nil, err
 		}
 		tokens = append(tokens, t)
 	}
 	return tokens, nil
+}
+
+// CountLiveAdminTokens returns how many admin tokens are neither revoked nor
+// expired. Zero means /api/admin/* refuses every caller.
+func (d *DB) CountLiveAdminTokens(ctx context.Context) (int, error) {
+	var n int
+	err := d.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM api_tokens
+		WHERE is_admin AND NOT revoked AND (expires_at IS NULL OR expires_at > NOW())
+	`).Scan(&n)
+	return n, err
 }
 
 // RevokeAPIToken marks a token as revoked (does not delete history).
