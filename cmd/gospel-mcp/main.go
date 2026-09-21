@@ -1,6 +1,6 @@
 // Command gospel-mcp is the thin MCP client that bridges stdio JSON-RPC
 // (used by VS Code Copilot, Claude Desktop, etc.) to the hosted
-// gospel-engine HTTP API at study.ibeco.me.
+// gospel-engine HTTP API at engine.ibeco.me.
 //
 // On startup the client checks the server's /api/version endpoint and,
 // if the running version differs from the server's, downloads the new
@@ -27,8 +27,14 @@ import (
 // Build-time version. The Dockerfile bakes this in via -ldflags.
 var version = "dev"
 
+// defaultEndpoint is where the client goes when GOSPEL_ENGINE_URL is unset.
+// It must be the live host: study.ibeco.me answers 404, which made every
+// search fail for anyone who ran the downloaded binary without setting the
+// variable.
+const defaultEndpoint = "https://engine.ibeco.me"
+
 func main() {
-	endpoint := envOr("GOSPEL_ENGINE_URL", "https://study.ibeco.me")
+	endpoint := envOr("GOSPEL_ENGINE_URL", defaultEndpoint)
 	token := os.Getenv("GOSPEL_ENGINE_TOKEN")
 	autoUpdate := envOr("GOSPEL_AUTO_UPDATE", "true") != "false"
 

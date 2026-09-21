@@ -1,4 +1,4 @@
-// Command gospel-engine is the hosted study.ibeco.me server: PostgreSQL-backed
+// Command gospel-engine is the hosted engine.ibeco.me server: PostgreSQL-backed
 // gospel search with REST API, token auth, and MCP binary distribution.
 package main
 
