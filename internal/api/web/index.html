@@ -124,19 +124,24 @@
   </div>
 
   <h2>Configure your MCP client</h2>
-  <p>Download the binary, make it executable (<code>chmod +x gospel-mcp-*</code> on macOS/Linux), then add it to your MCP client. An <a href="/api/admin/tokens">API token</a> is required.</p>
+  <p>Download the binary, make it executable (<code>chmod +x gospel-mcp-*</code> on macOS/Linux), then add it to your MCP client. An <a href="https://ibeco.me/settings">API token</a> is required.</p>
   <pre><code id="mcp-config">{
   "mcpServers": {
     "gospel": {
       "command": "/absolute/path/to/gospel-mcp-&lt;os&gt;-&lt;arch&gt;",
       "env": {
-        "GOSPEL_ENGINE_URL": "https://study.ibeco.me",
+        "GOSPEL_ENGINE_URL": "https://engine.ibeco.me",
         "GOSPEL_ENGINE_TOKEN": "stdy_..."
       }
     }
   }
 }</code></pre>
   <p>The client auto-updates: on startup it checks <code>/api/version</code> and pulls a newer binary if available. Disable with <code>GOSPEL_AUTO_UPDATE=false</code>.</p>
+
+  <h2>Hosted MCP: nothing to install</h2>
+  <p>Clients that dial a remote MCP server over HTTP can use this engine directly, with no binary and no local setup. In claude.ai that is Customize &gt; Connectors &gt; Add custom connector; give it a name and this URL, with your own token in place of <code>stdy_...</code>:</p>
+  <pre><code id="mcp-url">https://engine.ibeco.me/mcp?key=stdy_...</code></pre>
+  <p>Tokens come from <a href="https://ibeco.me/settings">ibeco.me settings</a>, the same ones the binary uses. Each token is yours alone and can be revoked there. The key travels in the URL because most remote connectors cannot send headers; a client that can send them may use <code>Authorization: Bearer stdy_...</code> against the same address instead. Same three tools either way: <code>gospel_search</code>, <code>gospel_get</code> and <code>gospel_list</code>.</p>
 
   <h2>API</h2>
   <p>Three endpoints, bearer-token authenticated:</p>
@@ -150,6 +155,16 @@ GET /api/list?type=scriptures</code></pre>
 </div>
 
 <script>
+// Show this deployment's own address in the examples, so a copy-paste is
+// correct wherever the engine runs. Runs before the fetches: the examples
+// should still be right when the API is unreachable.
+(() => {
+  const urlEl = document.getElementById("mcp-url");
+  if (urlEl) urlEl.textContent = location.origin + "/mcp?key=stdy_...";
+  const cfgEl = document.getElementById("mcp-config");
+  if (cfgEl) cfgEl.textContent = cfgEl.textContent.replace("https://engine.ibeco.me", location.origin);
+})();
+
 (async () => {
   try {
     const [h, v] = await Promise.all([
