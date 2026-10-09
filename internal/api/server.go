@@ -18,6 +18,7 @@ import (
 	"github.com/cpuchip/gospel-engine/internal/db"
 	"github.com/cpuchip/gospel-engine/internal/embed"
 	"github.com/cpuchip/gospel-engine/internal/indexer"
+	"github.com/cpuchip/gospel-engine/internal/ratelimit"
 	"github.com/cpuchip/gospel-engine/internal/search"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -31,8 +32,9 @@ type Server struct {
 	Cfg      *config.Config
 	DB       *db.DB
 	Searcher *search.Searcher
-	Embed    *embed.Client    // always set (even when semantic is disabled for search); used for live health pings
-	Indexer  *indexer.Indexer // optional; required for /api/admin/reparse-speakers
+	Embed    *embed.Client      // always set (even when semantic is disabled for search); used for live health pings
+	Indexer  *indexer.Indexer   // optional; required for /api/admin/reparse-speakers
+	Limiter  *ratelimit.Limiter // per-key rate limits; nil disables them (main always sets one)
 	Started  time.Time
 }
 
@@ -54,7 +56,7 @@ func (s *Server) Router() http.Handler {
 
 	// Authenticated API.
 	r.Group(func(g chi.Router) {
-		g.Use(auth.Middleware(s.DB, s.Cfg.DevMode))
+		g.Use(auth.Middleware(s.DB, s.Cfg.DevMode, s.Limiter))
 		g.Get("/api/search", s.handleSearch)
 		g.Get("/api/get", s.handleGet)
 		g.Get("/api/list", s.handleList)
@@ -62,7 +64,7 @@ func (s *Server) Router() http.Handler {
 
 	// Admin: authenticated AND an admin token. Ordinary tokens get 403 here.
 	r.Group(func(g chi.Router) {
-		g.Use(auth.Middleware(s.DB, s.Cfg.DevMode))
+		g.Use(auth.Middleware(s.DB, s.Cfg.DevMode, s.Limiter))
 		g.Use(auth.RequireAdmin(s.Cfg.DevMode))
 		g.Post("/api/admin/tokens", s.handleCreateToken)
 		g.Get("/api/admin/tokens", s.handleListTokens)

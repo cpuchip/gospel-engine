@@ -9,6 +9,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/cpuchip/gospel-engine/internal/db"
+	"github.com/cpuchip/gospel-engine/internal/ratelimit"
 )
 
 var (
@@ -21,15 +24,15 @@ var (
 // fakeValidator accepts only liveToken, errors on errorToken, and counts calls.
 type fakeValidator struct{ calls int }
 
-func (f *fakeValidator) validate(_ context.Context, raw string) (bool, error) {
+func (f *fakeValidator) validate(_ context.Context, raw string) (*db.APIToken, error) {
 	f.calls++
 	switch raw {
 	case liveToken:
-		return true, nil
+		return &db.APIToken{ID: 7, RateLimit: 2}, nil
 	case errorToken:
-		return false, errors.New("db down")
+		return nil, errors.New("db down")
 	}
-	return false, nil
+	return nil, nil
 }
 
 func marker(name string) http.Handler {
@@ -86,7 +89,7 @@ func TestMountMCP(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fv := &fakeValidator{}
-			h := mountMCP(marker("api"), marker("mcp"), tc.envKey, fv.validate)
+			h := mountMCP(marker("api"), marker("mcp"), tc.envKey, fv.validate, nil)
 			method := tc.method
 			if method == "" {
 				method = http.MethodPost
@@ -122,12 +125,45 @@ func TestMountMCPBodyLimit(t *testing.T) {
 			_, readErr = io.ReadAll(r.Body)
 			w.WriteHeader(http.StatusOK)
 		})
-		h := mountMCP(marker("api"), reader, sharedKey, nil)
+		h := mountMCP(marker("api"), reader, sharedKey, nil, nil)
 		req := httptest.NewRequest(http.MethodPost, "/mcp?key="+sharedKey, bytes.NewReader(make([]byte, tc.size)))
 		h.ServeHTTP(httptest.NewRecorder(), req)
 		var mbe *http.MaxBytesError
 		if got := errors.As(readErr, &mbe); got != tc.wantErr {
 			t.Errorf("body %d bytes: MaxBytesError = %v, want %v (err=%v)", tc.size, got, tc.wantErr, readErr)
+		}
+	}
+}
+
+// TestMountMCPRateLimit: a token's MCP requests spend from its bucket (the
+// fake's live token allows 2 per minute), the third is 429 with Retry-After
+// and never reaches the handler, and the legacy shared key is not limited.
+func TestMountMCPRateLimit(t *testing.T) {
+	fv := &fakeValidator{}
+	h := mountMCP(marker("api"), marker("mcp"), sharedKey, fv.validate, ratelimit.New())
+	do := func(target string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, target, nil))
+		return rec
+	}
+	for i := 1; i <= 2; i++ {
+		if rec := do("/mcp?key=" + liveToken); rec.Code != 200 {
+			t.Fatalf("token request %d: status %d, want 200", i, rec.Code)
+		}
+	}
+	rec := do("/mcp?key=" + liveToken)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("third token request: status %d, want 429", rec.Code)
+	}
+	if rec.Header().Get("X-Reached") != "" {
+		t.Error("a limited request reached the MCP handler")
+	}
+	if ra := rec.Header().Get("Retry-After"); ra != "30" {
+		t.Errorf("Retry-After = %q, want 30 at 2/min", ra)
+	}
+	for i := 0; i < 5; i++ {
+		if rec := do("/mcp?key=" + sharedKey); rec.Code != 200 {
+			t.Fatalf("shared key request %d: status %d, want 200 (not limited)", i+1, rec.Code)
 		}
 	}
 }

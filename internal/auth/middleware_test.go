@@ -13,7 +13,7 @@ func TestMiddlewareRejectsMalformedWithoutLookup(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("next handler must not be reached")
 	})
-	h := Middleware(nil, false)(next)
+	h := Middleware(nil, false, nil)(next)
 	for _, auth := range []string{
 		"",
 		"Basic dXNlcjpwYXNz",

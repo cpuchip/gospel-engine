@@ -15,11 +15,13 @@ import (
 	"time"
 
 	"github.com/cpuchip/gospel-engine/internal/api"
+	"github.com/cpuchip/gospel-engine/internal/auth"
 	"github.com/cpuchip/gospel-engine/internal/config"
 	"github.com/cpuchip/gospel-engine/internal/db"
 	"github.com/cpuchip/gospel-engine/internal/embed"
 	"github.com/cpuchip/gospel-engine/internal/indexer"
 	"github.com/cpuchip/gospel-engine/internal/mcpserver"
+	"github.com/cpuchip/gospel-engine/internal/ratelimit"
 	"github.com/cpuchip/gospel-engine/internal/search"
 )
 
@@ -121,6 +123,7 @@ func run() error {
 		Searcher: search.NewSearcher(database, embedder, embedOK, cfg.EmbedReprobe, cfg.LinkMode, cfg.GospelLibraryPath),
 		Embed:    embedder,
 		Indexer:  idx,
+		Limiter:  ratelimit.New(),
 		Started:  time.Now(),
 	}
 	apiRouter := srv.Router()
@@ -138,15 +141,15 @@ func run() error {
 	} else {
 		log.Printf("MCP-over-HTTP enabled at /mcp (key-gated: stdy_ API tokens or legacy GOSPEL_MCP_KEY)")
 	}
-	validateToken := func(ctx context.Context, raw string) (bool, error) {
+	validateToken := func(ctx context.Context, raw string) (*db.APIToken, error) {
 		tok, err := database.ValidateAPIToken(ctx, raw)
 		if err != nil || tok == nil {
-			return false, err
+			return nil, err
 		}
 		database.TouchAPITokenIfStale(tok)
-		return true, nil
+		return tok, nil
 	}
-	rootHandler := mountMCP(apiRouter, mcpSrv.HTTPHandler(), mcpKey, validateToken)
+	rootHandler := mountMCP(apiRouter, mcpSrv.HTTPHandler(), mcpKey, validateToken, srv.Limiter)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -180,9 +183,10 @@ func run() error {
 // maxMCPBody caps an MCP request body. JSON-RPC messages here are a few KB.
 const maxMCPBody = 1 << 20
 
-// tokenValidator reports whether raw is a live (unrevoked, unexpired) API token.
-// A non-nil error means the lookup failed, not that the token is invalid.
-type tokenValidator func(ctx context.Context, raw string) (bool, error)
+// tokenValidator returns the live (unrevoked, unexpired) API token raw names,
+// or nil when there is none. A non-nil error means the lookup failed, not that
+// the token is invalid.
+type tokenValidator func(ctx context.Context, raw string) (*db.APIToken, error)
 
 // mountMCP returns a handler that routes /mcp* to the streamable-HTTP MCP
 // handler and everything else to the API router. A request to /mcp is let
@@ -192,8 +196,11 @@ type tokenValidator func(ctx context.Context, raw string) (bool, error)
 // connectors such as claude.ai can only carry it in the URL) or as an
 // `Authorization: Bearer` header. Everything else fails closed: no credential,
 // an empty one, an unknown one, or an unset legacy key with no valid token is
-// 401; a failed token lookup is 500, never a pass.
-func mountMCP(apiRouter, mcpHandler http.Handler, key string, validate tokenValidator) http.Handler {
+// 401; a failed token lookup is 500, never a pass. A token request spends one
+// request from that token's bucket in lim (shared with the REST middleware):
+// an empty bucket is 429 with Retry-After. The legacy shared key is not
+// limited: it is the operator's own key and has no rate_limit row.
+func mountMCP(apiRouter, mcpHandler http.Handler, key string, validate tokenValidator, lim *ratelimit.Limiter) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/mcp" && !strings.HasPrefix(r.URL.Path, "/mcp/") {
 			apiRouter.ServeHTTP(w, r)
@@ -217,12 +224,16 @@ func mountMCP(apiRouter, mcpHandler http.Handler, key string, validate tokenVali
 			serveMCP()
 			return
 		case validate != nil && db.LooksLikeAPIToken(supplied):
-			ok, err := validate(r.Context(), supplied)
+			tok, err := validate(r.Context(), supplied)
 			if err != nil {
 				http.Error(w, `{"error":"auth lookup failed"}`, http.StatusInternalServerError)
 				return
 			}
-			if ok {
+			if tok != nil {
+				if !auth.Spend(w, lim, tok) {
+					http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
+					return
+				}
 				serveMCP()
 				return
 			}

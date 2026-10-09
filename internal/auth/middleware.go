@@ -4,9 +4,11 @@ package auth
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/cpuchip/gospel-engine/internal/db"
+	"github.com/cpuchip/gospel-engine/internal/ratelimit"
 )
 
 type contextKey string
@@ -29,9 +31,12 @@ func isInternalTrusted(ctx context.Context) bool {
 	return v
 }
 
-// Middleware returns an HTTP middleware that validates `Authorization: Bearer stdy_…`.
-// devMode bypasses auth entirely (local testing only).
-func Middleware(database *db.DB, devMode bool) func(http.Handler) http.Handler {
+// Middleware returns an HTTP middleware that validates `Authorization: Bearer stdy_…`
+// and spends one request from the token's rate-limit bucket (429 with
+// Retry-After when it is empty; lim nil disables limiting). devMode bypasses
+// auth entirely (local testing only); in-process trusted calls were already
+// counted where they entered (/mcp) and are not counted again.
+func Middleware(database *db.DB, devMode bool, lim *ratelimit.Limiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if devMode || isInternalTrusted(r.Context()) {
@@ -56,6 +61,10 @@ func Middleware(database *db.DB, devMode bool) func(http.Handler) http.Handler {
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return
 			}
+			if !Spend(w, lim, tok) {
+				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+				return
+			}
 			// Best-effort, rate-limited touch (never blocks the request).
 			database.TouchAPITokenIfStale(tok)
 
@@ -63,6 +72,20 @@ func Middleware(database *db.DB, devMode bool) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// Spend takes one request from tok's bucket. When the bucket is empty it sets
+// Retry-After on w and returns false; the caller writes the 429 body in its
+// own error format. A nil limiter always allows.
+func Spend(w http.ResponseWriter, lim *ratelimit.Limiter, tok *db.APIToken) bool {
+	if lim == nil || tok == nil {
+		return true
+	}
+	ok, wait := lim.Allow(tok.ID, tok.RateLimit)
+	if !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(ratelimit.RetryAfterSeconds(wait)))
+	}
+	return ok
 }
 
 // FromContext returns the APIToken associated with the request, if any.
