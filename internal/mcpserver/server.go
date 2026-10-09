@@ -2,7 +2,7 @@
 // endpoint (mounted at /mcp), so a remote bridge can dial it like exa-search
 // or dnd-tools — no local stdio binary required.
 //
-// The tools (gospel_search / gospel_get / gospel_list) are intentionally
+// The tools (gospel_search / gospel_get / gospel_related / gospel_list) are intentionally
 // identical to the ones the stdio gospel-mcp client exposes. Rather than
 // re-implement the search/get/list logic, each handler issues an in-process
 // request against the server's own chi router (carrying a trusted context so
@@ -156,6 +156,49 @@ func (s *Server) register() {
 				q.Set("cross_refs", "true")
 			}
 			body, err := s.callAPI(ctx, "/api/get?"+q.Encode())
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(body), nil
+		},
+	)
+
+	// --- gospel_related -------------------------------------------------
+	s.mcp.AddTool(
+		mcp.NewTool("gospel_related",
+			mcp.WithDescription("Passages the library itself links to a passage, one or two hops out: chapter footnotes, Topical Guide / Bible Dictionary / Guide to the Scriptures entries, and the scripture citations in conference talks and manuals. Seed with a scripture `reference` (verse, range, or chapter) or with `type` (talks, manuals, study_aids) + `id`. Each result says how it was reached (via.edge, via.direction: out = the seed's own link, in = a link pointing at the seed; via.through names the passage in between on a two-hop result). Ranked by hops, then by how many links reach it."),
+			readOnlyAnnotations(),
+			mcp.WithString("reference", mcp.Description("Scripture reference: \"Ether 12:27\", \"D&C 93:24-30\", \"Mosiah 4\".")),
+			mcp.WithString("type", mcp.Description("Record type for id seeds"), mcp.Enum("talks", "manuals", "study_aids")),
+			mcp.WithNumber("id", mcp.Description("Record id (with type=)")),
+			mcp.WithNumber("hops", mcp.Description("1 (default) or 2")),
+			mcp.WithArray("kinds", mcp.Description("Subset of: verses, talks, manuals, aids (default all)"),
+				mcp.Items(map[string]any{"type": "string", "enum": []string{"verses", "talks", "manuals", "aids"}})),
+			mcp.WithNumber("limit", mcp.Description("Max results (default 30, cap 200)")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			q := url.Values{}
+			if ref := strings.TrimSpace(req.GetString("reference", "")); ref != "" {
+				q.Set("reference", ref)
+			} else {
+				typ := strings.TrimSpace(req.GetString("type", ""))
+				id := req.GetInt("id", 0)
+				if typ == "" || id == 0 {
+					return mcp.NewToolResultError("provide either reference, or both type and id"), nil
+				}
+				q.Set("type", typ)
+				q.Set("id", fmt.Sprint(id))
+			}
+			if hops := req.GetInt("hops", 0); hops > 0 {
+				q.Set("hops", fmt.Sprint(hops))
+			}
+			if kinds := req.GetStringSlice("kinds", nil); len(kinds) > 0 {
+				q.Set("kinds", strings.Join(kinds, ","))
+			}
+			if limit := req.GetInt("limit", 0); limit > 0 {
+				q.Set("limit", fmt.Sprint(limit))
+			}
+			body, err := s.callAPI(ctx, "/api/related?"+q.Encode())
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}

@@ -26,6 +26,7 @@ func TestAdminRoutesRequireAdminToken(t *testing.T) {
 		{http.MethodPost, "/api/admin/reparse-speakers"},
 		{http.MethodPost, "/api/admin/repair-references"},
 		{http.MethodPost, "/api/admin/rebuild-xrefs"},
+		{http.MethodPost, "/api/admin/rebuild-graph"},
 	} {
 		req := httptest.NewRequest(rt.method, rt.path, strings.NewReader(`{"name":"x"}`))
 		req = req.WithContext(auth.WithInternalTrusted(req.Context()))

@@ -60,6 +60,7 @@ func (s *Server) Router() http.Handler {
 		g.Get("/api/search", s.handleSearch)
 		g.Get("/api/get", s.handleGet)
 		g.Get("/api/list", s.handleList)
+		g.Get("/api/related", s.handleRelated)
 	})
 
 	// Admin: authenticated AND an admin token. Ordinary tokens get 403 here.
@@ -73,6 +74,7 @@ func (s *Server) Router() http.Handler {
 		g.Post("/api/admin/reparse-speakers", s.handleReparseSpeakers)
 		g.Post("/api/admin/repair-references", s.handleRepairReferences)
 		g.Post("/api/admin/rebuild-xrefs", s.handleRebuildXrefs)
+		g.Post("/api/admin/rebuild-graph", s.handleRebuildGraph)
 	})
 
 	return r
@@ -728,6 +730,26 @@ func (s *Server) handleRebuildXrefs(w http.ResponseWriter, r *http.Request) {
 			"unmatched_targets": sum.UnmatchedTargets,
 			"duration_ms":       sum.Duration.Milliseconds(),
 		}
+	}
+	if err != nil {
+		body["error"] = err.Error()
+		writeJSON(w, http.StatusInternalServerError, body)
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+// handleRebuildGraph replaces graph_edges from the rows the index holds
+// (cross_references, study_aids, talks, manuals), in one transaction.
+func (s *Server) handleRebuildGraph(w http.ResponseWriter, r *http.Request) {
+	if s.Indexer == nil {
+		http.Error(w, "indexer not configured", http.StatusServiceUnavailable)
+		return
+	}
+	sum, err := s.Indexer.RebuildGraph(r.Context())
+	body := map[string]any{}
+	if sum != nil {
+		body = map[string]any{"edges": sum.Edges, "by_type": sum.ByType, "duration_ms": sum.Duration.Milliseconds()}
 	}
 	if err != nil {
 		body["error"] = err.Error()
