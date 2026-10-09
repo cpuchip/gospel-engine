@@ -76,9 +76,13 @@ func Middleware(database *db.DB, devMode bool, lim *ratelimit.Limiter) func(http
 
 // Spend takes one request from tok's bucket. When the bucket is empty it sets
 // Retry-After on w and returns false; the caller writes the 429 body in its
-// own error format. A nil limiter always allows.
+// own error format. A nil limiter always allows, and so does an admin token:
+// admin tokens are minted only inside the container (the operator's own), and
+// one of them is ibeco.me's service token, which carries every ibeco.me
+// reader's scripture lookups; a per-key bucket there would throttle them all
+// together.
 func Spend(w http.ResponseWriter, lim *ratelimit.Limiter, tok *db.APIToken) bool {
-	if lim == nil || tok == nil {
+	if lim == nil || tok == nil || tok.IsAdmin {
 		return true
 	}
 	ok, wait := lim.Allow(tok.ID, tok.RateLimit)

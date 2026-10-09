@@ -148,7 +148,7 @@
   <pre><code>GET /api/search?q=faith&amp;mode=hybrid&amp;limit=20
 GET /api/get?ref=1+Nephi+3:7
 GET /api/list?type=scriptures</code></pre>
-  <p>Each token has a rate limit, 60 requests a minute unless it was set higher, shared by the API and the hosted MCP. Over it, the server answers <code>429 Too Many Requests</code> with a <code>Retry-After</code> header giving the seconds to wait.</p>
+  <p>Each personal token has a rate limit, 60 requests a minute unless it was set higher, shared by the API and the hosted MCP. Over it, the server answers <code>429 Too Many Requests</code> with a <code>Retry-After</code> header giving the seconds to wait.</p>
 
   <footer>
     gospel-engine · <a href="/api/health">health</a> · <a href="/api/version">version</a>

@@ -5,6 +5,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/cpuchip/gospel-engine/internal/db"
+	"github.com/cpuchip/gospel-engine/internal/ratelimit"
 )
 
 // The database is nil on purpose: any request that reaches the token lookup
@@ -30,6 +33,29 @@ func TestMiddlewareRejectsMalformedWithoutLookup(t *testing.T) {
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("auth %q: status = %d, want 401", auth, rec.Code)
+		}
+	}
+}
+
+// Spend limits ordinary tokens and never an admin token (ibeco.me's service
+// token is one, and carries every ibeco.me reader's lookups).
+func TestSpendLimitsOrdinaryNotAdmin(t *testing.T) {
+	lim := ratelimit.New()
+	user := &db.APIToken{ID: 1, RateLimit: 1}
+	admin := &db.APIToken{ID: 2, RateLimit: 1, IsAdmin: true}
+	if !Spend(httptest.NewRecorder(), lim, user) {
+		t.Fatal("first ordinary request refused")
+	}
+	rec := httptest.NewRecorder()
+	if Spend(rec, lim, user) {
+		t.Error("second ordinary request at 1/min allowed")
+	}
+	if rec.Header().Get("Retry-After") != "60" {
+		t.Errorf("Retry-After = %q, want 60", rec.Header().Get("Retry-After"))
+	}
+	for i := 0; i < 5; i++ {
+		if !Spend(httptest.NewRecorder(), lim, admin) {
+			t.Fatalf("admin request %d limited", i+1)
 		}
 	}
 }

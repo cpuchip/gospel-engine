@@ -37,7 +37,7 @@ The `gospel-mcp` binary is a thin stdio bridge that translates MCP JSON-RPC into
 
 ## Rate limits
 
-Each `stdy_` token carries a rate limit (`api_tokens.rate_limit`, default 60 requests a minute), enforced per token across the REST API and `/mcp` together: a bucket of that many requests that refills at that rate. An empty bucket answers `429 Too Many Requests` with `Retry-After` in seconds. The legacy shared `GOSPEL_MCP_KEY` is not limited. Buckets live in memory, so a restart refills them.
+Each `stdy_` token carries a rate limit (`api_tokens.rate_limit`, default 60 requests a minute), enforced per token across the REST API and `/mcp` together: a bucket of that many requests that refills at that rate. An empty bucket answers `429 Too Many Requests` with `Retry-After` in seconds. Admin tokens (minted only inside the container; ibeco.me's service token is one, and it carries every ibeco.me reader's lookups) and the legacy shared `GOSPEL_MCP_KEY` are not limited. Buckets live in memory, so a restart refills them.
 
 ## Search and semantic embeddings
 
