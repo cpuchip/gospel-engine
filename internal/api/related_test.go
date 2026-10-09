@@ -88,6 +88,16 @@ func TestRelatedAgainstPostgres(t *testing.T) {
 		VALUES (2099, '10', 'Test Speaker', 'Test Talk', $1, $2) RETURNING id`, content, talkPath).Scan(&talkID); err != nil {
 		t.Fatal(err)
 	}
+	// Before any build, the endpoint says so instead of answering "no links".
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/related?reference="+url.QueryEscape("Ether 12:27"), nil)
+		req = req.WithContext(auth.WithInternalTrusted(req.Context()))
+		rec := httptest.NewRecorder()
+		(&Server{Cfg: &config.Config{}, DB: d}).Router().ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("related before the graph exists: status %d, want 503", rec.Code)
+		}
+	}
 	idx := indexer.New(d, root, "")
 	res, err := idx.IndexAll(ctx)
 	if err != nil {
@@ -171,6 +181,22 @@ func TestRelatedAgainstPostgres(t *testing.T) {
 	}
 	if far == 0 {
 		t.Error("hops=2 found nothing beyond one hop")
+	}
+
+	// A two-hop walk from a whole long chapter is refused, not run.
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/related?hops=2&reference="+url.QueryEscape("Psalms 119"), nil)
+		req = req.WithContext(auth.WithInternalTrusted(req.Context()))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("hops=2 from Psalms 119 (177 seeds): status %d, want 400", rec.Code)
+		}
+	}
+	// One hop from a chapter counts each verse that links a target as its own route.
+	ch := get(url.Values{"reference": {"Ether 12"}, "limit": {"5"}})
+	if len(ch.Results) == 0 || ch.Results[0].Links < 2 {
+		t.Errorf("top one-hop result from Ether 12 has links %v, want several seed routes", ch.Results)
 	}
 
 	// Seeding from the talk finds the verse it cites.

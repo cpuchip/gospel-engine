@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -69,12 +68,11 @@ func xrefTargetKey(r XrefRow) string {
 // the scriptures, and scripture files that are not numbered chapters, name
 // nothing.
 func LinkTargets(srcPath, text, href string) []string {
-	tp := path.Clean(path.Join(path.Dir(filepath.ToSlash(srcPath)), href))
-	j := strings.Index(tp, "/eng/scriptures/")
-	if j < 0 {
+	rel, ok := scripturesRel(path.Join(path.Dir(slashPath(srcPath)), href))
+	if !ok {
 		return nil
 	}
-	parts := strings.Split(strings.TrimSuffix(tp[j+len("/eng/scriptures/"):], ".md"), "/")
+	parts := strings.Split(strings.TrimSuffix(rel, ".md"), "/")
 	switch {
 	case parts[0] == "jst":
 		if len(parts) == 3 && isDigits(parts[2]) {
@@ -238,6 +236,9 @@ func (idx *Indexer) RebuildGraph(ctx context.Context) (*GraphSummary, error) {
 		return sum, err
 	}
 	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(graphRebuildLock)); err != nil {
+		return sum, fmt.Errorf("lock graph rebuild: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM graph_edges`); err != nil {
 		return sum, fmt.Errorf("clear graph_edges: %w", err)
 	}
@@ -261,10 +262,14 @@ func (idx *Indexer) RebuildGraph(ctx context.Context) (*GraphSummary, error) {
 	return sum, tx.Commit(ctx)
 }
 
+// graphRebuildLock serialises graph_edges rebuilds (pg_advisory_xact_lock key).
+const graphRebuildLock = 0x67650002
+
 // maybeRebuildGraph rebuilds after a pass that indexed anything the graph
-// reads, or when the table is empty. Failures are logged, never fatal.
+// reads or rebuilt cross_references, or when the table is empty. Failures are
+// logged, never fatal.
 func (idx *Indexer) maybeRebuildGraph(ctx context.Context, r *Result) {
-	if r.ChaptersIndexed+r.TalksIndexed+r.ManualsIndexed+r.StudyAidsIndexed == 0 {
+	if r.ChaptersIndexed+r.TalksIndexed+r.ManualsIndexed+r.StudyAidsIndexed+r.XrefRows == 0 {
 		var n int64
 		if err := idx.DB.Pool.QueryRow(ctx, `SELECT count(*) FROM graph_edges`).Scan(&n); err != nil || n > 0 {
 			return

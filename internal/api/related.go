@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,12 +19,18 @@ import (
 //	?type=talks&id=123         every paragraph of a talk (also manuals, study_aids)
 //
 // hops=1|2 (default 1), kinds=verses,talks,manuals,aids (default all),
-// limit (default 30, cap 200). Ranked by hop count, then by how many distinct
-// links reach the passage. Each result says how it was reached.
+// limit (default 30, cap 200). Ranked by hop count, then by links: how many
+// distinct routes (seed passage, and on two hops the passage between) reach it
+// at that hop count. Each result says how it was reached. A two-hop walk takes
+// at most 60 seeds and follows at most 100 links out of any one passage at the
+// second hop; every walk runs under a 5 s statement timeout.
 
 const (
 	relatedDefaultLimit = 30
 	relatedMaxLimit     = 200
+	relatedMaxSeeds2    = 60  // seeds allowed on a two-hop walk (a 50-verse range fits; Psalms 119 does not)
+	relatedFanout2      = 100 // second-hop links followed out of any one passage (TG entries list ~220 verses)
+	relatedTimeout      = "5s"
 )
 
 // relatedKinds maps a kinds= value to the key prefixes it admits.
@@ -49,7 +56,7 @@ type relatedResult struct {
 	Kind      string      `json:"kind"` // verse | chapter | talk | manual | study_aid
 	Key       string      `json:"key"`
 	Hops      int         `json:"hops,omitempty"`
-	Links     int         `json:"links,omitempty"` // distinct links that reach it
+	Links     int         `json:"links,omitempty"` // distinct routes (seed, through) that reach it at its hop count
 	Via       *relatedVia `json:"via,omitempty"`
 	ID        int64       `json:"id,omitempty"` // scriptures / talks / manuals / study_aids id
 	Reference string      `json:"reference,omitempty"`
@@ -97,9 +104,23 @@ func (s *Server) handleRelated(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var built bool
+	if err := s.DB.Pool.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM graph_edges)`).Scan(&built); err != nil {
+		log.Printf("related: graph check: %v", err)
+		http.Error(w, "related lookup failed", http.StatusInternalServerError)
+		return
+	}
+	if !built {
+		http.Error(w, "the link graph has not been built yet (an index pass or POST /api/admin/rebuild-graph builds it)", http.StatusServiceUnavailable)
+		return
+	}
 	seeds, seedErr, status := s.relatedSeeds(r.Context(), q.Get("reference"), q.Get("type"), q.Get("id"))
 	if seedErr != "" {
 		http.Error(w, seedErr, status)
+		return
+	}
+	if hops == 2 && len(seeds) > relatedMaxSeeds2 {
+		http.Error(w, fmt.Sprintf("two hops from %d passages is too wide (at most %d): narrow the reference to a verse range, or use hops=1", len(seeds), relatedMaxSeeds2), http.StatusBadRequest)
 		return
 	}
 	if len(seeds) == 0 {
@@ -109,7 +130,8 @@ func (s *Server) handleRelated(w http.ResponseWriter, r *http.Request) {
 
 	results, err := s.walkRelated(r.Context(), seeds, hops, prefixes, limit)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("related failed: %v", err), http.StatusInternalServerError)
+		log.Printf("related: walk %v hops=%d: %v", seeds[:min(len(seeds), 3)], hops, err)
+		http.Error(w, "related lookup failed (or took too long)", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -142,7 +164,8 @@ func (s *Server) relatedSeeds(ctx context.Context, ref, typ, idStr string) ([]st
 			 WHERE book = $1 AND chapter = $2 AND verse BETWEEN $3 AND $4 ORDER BY verse`,
 			p.Book, p.Chapter, lo, hi)
 		if err != nil {
-			return nil, err.Error(), http.StatusInternalServerError
+			log.Printf("related: seeds: %v", err)
+			return nil, "related lookup failed", http.StatusInternalServerError
 		}
 		defer rows.Close()
 		var seeds []string
@@ -151,7 +174,8 @@ func (s *Server) relatedSeeds(ctx context.Context, ref, typ, idStr string) ([]st
 			var book string
 			var ch, v int
 			if err := rows.Scan(&vol, &book, &ch, &v); err != nil {
-				return nil, err.Error(), http.StatusInternalServerError
+				log.Printf("related: seeds: %v", err)
+				return nil, "related lookup failed", http.StatusInternalServerError
 			}
 			seeds = append(seeds, indexer.VerseKey(vol, book, ch, v))
 		}
@@ -196,32 +220,64 @@ func (s *Server) relatedSeeds(ctx context.Context, ref, typ, idStr string) ([]st
 
 // walkRelated runs the walk and resolves the results for display.
 func (s *Server) walkRelated(ctx context.Context, seeds []string, hops int, prefixes []string, limit int) ([]relatedResult, error) {
-	// walk(key, depth, edge, rev, through): edge/rev are the FIRST hop's link
-	// and direction, carried along; through is the depth-1 node on a depth-2
-	// row. UNION removes duplicate rows, so links counts distinct routes.
+	// Two explicit hops that carry the seed along. hop1: every link out of a
+	// seed. hop2: out of each first-hop passage (not a seed), at most $5 links
+	// per passage, so a hub cannot blow up the walk. A result's depth is its
+	// nearest hop; links counts distinct (seed, through) routes at that depth.
 	const q = `
-WITH RECURSIVE walk(key, depth, edge, rev, through) AS (
-    SELECT k, 0, ''::text, false, ''::text FROM unnest($1::text[]) k
-  UNION
-    SELECT e.dst, w.depth + 1,
-           CASE WHEN w.depth = 0 THEN e.edge_type ELSE w.edge END,
-           CASE WHEN w.depth = 0 THEN e.reverse ELSE w.rev END,
-           CASE WHEN w.depth = 0 THEN '' ELSE w.key END
-    FROM walk w JOIN graph_edges e ON e.src = w.key
-    WHERE w.depth < $2
+WITH hop1 AS (
+    SELECT DISTINCT e.src AS seed, e.dst AS key, e.edge_type AS edge, e.reverse AS rev
+    FROM graph_edges e
+    WHERE e.src = ANY($1::text[])
+),
+mid AS (
+    SELECT DISTINCT key FROM hop1
+    WHERE $2::int >= 2 AND key <> ALL($1::text[])
+),
+hop2 AS (
+    SELECT h.seed, x.dst AS key, h.edge, h.rev, h.key AS through
+    FROM mid m
+    CROSS JOIN LATERAL (
+        SELECT e.dst FROM graph_edges e WHERE e.src = m.key ORDER BY e.dst LIMIT $5
+    ) x
+    JOIN hop1 h ON h.key = m.key
+),
+reach AS (
+    SELECT seed, key, 1 AS depth, edge, rev, ''::text AS through FROM hop1
+    UNION ALL
+    SELECT seed, key, 2, edge, rev, through FROM hop2
+),
+kept AS (
+    SELECT r.* FROM reach r
+    WHERE r.key <> ALL($1::text[])
+      AND split_part(r.key, ':', 1) = ANY($3::text[])
+),
+nearest AS (
+    SELECT k.* FROM kept k
+    JOIN (SELECT key, min(depth) AS depth FROM kept GROUP BY key) b USING (key, depth)
+),
+counted AS (
+    SELECT key, min(depth) AS depth, count(DISTINCT seed || '|' || through) AS links
+    FROM nearest GROUP BY key
+),
+via AS (
+    SELECT DISTINCT ON (key) key, edge, rev, through
+    FROM nearest
+    ORDER BY key, edge, through
 )
-SELECT key, depth, edge, rev, through, links FROM (
-    SELECT DISTINCT ON (key) key, depth, edge, rev, through,
-           count(*) OVER (PARTITION BY key) AS links
-    FROM walk
-    WHERE depth > 0
-      AND key <> ALL($1::text[])
-      AND split_part(key, ':', 1) = ANY($3::text[])
-    ORDER BY key, depth, edge, through
-) r
-ORDER BY depth, links DESC, key
+SELECT c.key, c.depth, v.edge, v.rev, v.through, c.links
+FROM counted c JOIN via v USING (key)
+ORDER BY c.depth, c.links DESC, c.key
 LIMIT $4`
-	rows, err := s.DB.Pool.Query(ctx, q, seeds, hops, prefixes, limit)
+	tx, err := s.DB.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) // read-only: nothing to commit
+	if _, err := tx.Exec(ctx, `SET LOCAL statement_timeout = '`+relatedTimeout+`'`); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, q, seeds, hops, prefixes, limit, relatedFanout2)
 	if err != nil {
 		return nil, err
 	}
