@@ -46,7 +46,11 @@ type Config struct {
 	// once per interval and enables semantic on success — so the backend
 	// recovering never requires a process restart. Env EMBED_REPROBE_SECONDS.
 	EmbedReprobe time.Duration
-	DevMode      bool // disables auth — local dev only
+	// CitationContact is the address the engine names in its User-Agent when it
+	// asks the BYU Scripture Citation Index, so the index can reach a person.
+	// Env CITATION_CONTACT.
+	CitationContact string
+	DevMode         bool // disables auth — local dev only
 }
 
 func Load() (*Config, error) {
@@ -66,6 +70,7 @@ func Load() (*Config, error) {
 		BulkLoadEmbeds:    envBool("BULK_LOAD_EMBEDDINGS", true),
 		EmbedRequestTimeo: time.Duration(envInt("EMBED_TIMEOUT_SECONDS", 60)) * time.Second,
 		EmbedReprobe:      time.Duration(envInt("EMBED_REPROBE_SECONDS", 60)) * time.Second,
+		CitationContact:   env("CITATION_CONTACT", "stuffleberryco+privacy@gmail.com"),
 		DevMode:           envBool("DEV_MODE", false),
 	}
 	if c.DatabaseURL == "" {

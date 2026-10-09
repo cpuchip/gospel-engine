@@ -2,7 +2,7 @@
 // endpoint (mounted at /mcp), so a remote bridge can dial it like exa-search
 // or dnd-tools — no local stdio binary required.
 //
-// The tools (gospel_search / gospel_get / gospel_related / gospel_list) are intentionally
+// The tools (gospel_search / gospel_get / gospel_related / gospel_citations / gospel_list) are intentionally
 // identical to the ones the stdio gospel-mcp client exposes. Rather than
 // re-implement the search/get/list logic, each handler issues an in-process
 // request against the server's own chi router (carrying a trusted context so
@@ -199,6 +199,29 @@ func (s *Server) register() {
 				q.Set("limit", fmt.Sprint(limit))
 			}
 			body, err := s.callAPI(ctx, "/api/related?"+q.Encode())
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(body), nil
+		},
+	)
+
+	// --- gospel_citations ----------------------------------------------
+	s.mcp.AddTool(
+		mcp.NewTool("gospel_citations",
+			mcp.WithDescription("Who has cited a verse: General Conference talks, Journal of Discourses and other sources, answered live by the BYU Scripture Citation Index (scriptures.byu.edu) and kept for a day. Each citation has the index's locator (e.g. \"1989-O:54\"), speaker, title, a link to it in the index, and for conference talks a link to the talk at churchofjesuschrist.org. The data is BYU's."),
+			mcp.WithReadOnlyHintAnnotation(true),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
+			mcp.WithOpenWorldHintAnnotation(true), // it asks BYU's site
+			mcp.WithString("reference", mcp.Required(), mcp.Description("A verse or verse range: \"Ether 12:27\", \"D&C 93:24-30\".")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			ref := strings.TrimSpace(req.GetString("reference", ""))
+			if ref == "" {
+				return mcp.NewToolResultError("reference is required"), nil
+			}
+			body, err := s.callAPI(ctx, "/api/citations?"+url.Values{"reference": {ref}}.Encode())
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
