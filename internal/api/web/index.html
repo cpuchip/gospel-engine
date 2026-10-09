@@ -141,13 +141,15 @@
   <h2>Hosted MCP: nothing to install</h2>
   <p>Clients that dial a remote MCP server over HTTP can use this engine directly, with no binary and no local setup. In claude.ai that is Customize &gt; Connectors &gt; Add custom connector; give it a name and this URL, with your own token in place of <code>stdy_...</code>:</p>
   <pre><code id="mcp-url">https://engine.ibeco.me/mcp?key=stdy_...</code></pre>
-  <p>Tokens come from <a href="https://ibeco.me/settings">ibeco.me settings</a>, the same ones the binary uses. Each token is yours alone and can be revoked there. The key travels in the URL because most remote connectors cannot send headers; a client that can send them may use <code>Authorization: Bearer stdy_...</code> against the same address instead. Same three tools either way: <code>gospel_search</code>, <code>gospel_get</code> and <code>gospel_list</code>.</p>
+  <p>Tokens come from <a href="https://ibeco.me/settings">ibeco.me settings</a>, the same ones the binary uses. Each token is yours alone and can be revoked there. The key travels in the URL because most remote connectors cannot send headers; a client that can send them may use <code>Authorization: Bearer stdy_...</code> against the same address instead. Same four tools either way: <code>gospel_search</code>, <code>gospel_get</code>, <code>gospel_related</code> and <code>gospel_list</code>.</p>
 
   <h2>API</h2>
-  <p>Three endpoints, bearer-token authenticated:</p>
+  <p>Four endpoints, bearer-token authenticated:</p>
   <pre><code>GET /api/search?q=faith&amp;mode=hybrid&amp;limit=20
 GET /api/get?ref=1+Nephi+3:7
+GET /api/related?reference=Ether+12:27&amp;hops=2
 GET /api/list?type=scriptures</code></pre>
+  <p><code>/api/related</code> returns the passages the library itself links to a passage: its chapter footnotes, the Topical Guide, Bible Dictionary and Guide to the Scriptures entries that list it, and the conference talks and manuals that cite it, one or two links out, each with how it was reached.</p>
   <p>Each personal token has a rate limit, 60 requests a minute unless it was set higher, shared by the API and the hosted MCP. Over it, the server answers <code>429 Too Many Requests</code> with a <code>Retry-After</code> header giving the seconds to wait.</p>
 
   <footer>
