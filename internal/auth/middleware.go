@@ -76,21 +76,29 @@ func Middleware(database *db.DB, devMode bool, lim *ratelimit.Limiter) func(http
 
 // Spend takes one request from tok's bucket. When the bucket is empty it sets
 // Retry-After on w and returns false; the caller writes the 429 body in its
-// own error format. A nil limiter always allows, and so does an admin token:
-// admin tokens are minted only inside the container (the operator's own), and
-// one of them is ibeco.me's service token, which carries every ibeco.me
-// reader's scripture lookups; a per-key bucket there would throttle them all
-// together.
+// own error format. A nil limiter always allows. An admin token gets at least
+// AdminRateFloor: admin tokens are minted only inside the container, and one of
+// them is ibeco.me's service token, which carries every ibeco.me reader's
+// scripture lookups (a 60/min bucket would throttle them all together); a
+// floor rather than no limit still bounds what a leaked admin token can do.
 func Spend(w http.ResponseWriter, lim *ratelimit.Limiter, tok *db.APIToken) bool {
-	if lim == nil || tok == nil || tok.IsAdmin {
+	if lim == nil || tok == nil {
 		return true
 	}
-	ok, wait := lim.Allow(tok.ID, tok.RateLimit)
+	limit := tok.RateLimit
+	if tok.IsAdmin {
+		limit = max(limit, AdminRateFloor)
+	}
+	ok, wait := lim.Allow(tok.ID, limit)
 	if !ok {
 		w.Header().Set("Retry-After", strconv.Itoa(ratelimit.RetryAfterSeconds(wait)))
 	}
 	return ok
 }
+
+// AdminRateFloor is the lowest per-minute limit an admin token gets (100 a
+// second), well above ibeco.me's lookup traffic and far below abuse.
+const AdminRateFloor = 6000
 
 // FromContext returns the APIToken associated with the request, if any.
 func FromContext(ctx context.Context) *db.APIToken {

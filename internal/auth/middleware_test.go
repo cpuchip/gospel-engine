@@ -37,8 +37,9 @@ func TestMiddlewareRejectsMalformedWithoutLookup(t *testing.T) {
 	}
 }
 
-// Spend limits ordinary tokens and never an admin token (ibeco.me's service
-// token is one, and carries every ibeco.me reader's lookups).
+// Spend limits ordinary tokens at their own rate, and admin tokens at no less
+// than AdminRateFloor (ibeco.me's service token is one, and carries every
+// ibeco.me reader's lookups).
 func TestSpendLimitsOrdinaryNotAdmin(t *testing.T) {
 	lim := ratelimit.New()
 	user := &db.APIToken{ID: 1, RateLimit: 1}
@@ -53,9 +54,11 @@ func TestSpendLimitsOrdinaryNotAdmin(t *testing.T) {
 	if rec.Header().Get("Retry-After") != "60" {
 		t.Errorf("Retry-After = %q, want 60", rec.Header().Get("Retry-After"))
 	}
-	for i := 0; i < 5; i++ {
-		if !Spend(httptest.NewRecorder(), lim, admin) {
-			t.Fatalf("admin request %d limited", i+1)
-		}
+	n := 0
+	for n < AdminRateFloor+10 && Spend(httptest.NewRecorder(), lim, admin) {
+		n++
+	}
+	if n != AdminRateFloor {
+		t.Errorf("admin token (rate_limit 1) allowed %d in a burst, want the floor %d", n, AdminRateFloor)
 	}
 }

@@ -262,7 +262,7 @@ func BuildCrossReferences(gospelRoot string) ([]XrefRow, *XrefSummary, error) {
 		if i < 0 {
 			continue
 		}
-		dir := path.Dir(filepath.ToSlash(c.path))
+		dir := path.Dir(slashPath(c.path))
 		for _, line := range strings.Split(txt[i+len("## Footnotes"):], "\n") {
 			m := xrefFnIDRe.FindStringSubmatch(line)
 			if m == nil {
@@ -272,13 +272,12 @@ func BuildCrossReferences(gospelRoot string) ([]XrefRow, *XrefSummary, error) {
 			parts3 := strings.SplitN(line, "**", 3)
 			for _, lm := range xrefLinkRe.FindAllStringSubmatch(parts3[len(parts3)-1], -1) {
 				text, href := lm[1], lm[2]
-				tp := path.Clean(path.Join(dir, href))
-				j := strings.Index(tp, "/eng/scriptures/")
-				if j < 0 {
+				rel, ok := scripturesRel(path.Join(dir, href))
+				if !ok {
 					sum.Skipped["target_outside_scriptures"]++
 					continue
 				}
-				parts := strings.Split(strings.TrimSuffix(tp[j+len("/eng/scriptures/"):], ".md"), "/")
+				parts := strings.Split(strings.TrimSuffix(rel, ".md"), "/")
 				r := XrefRow{SourceVolume: c.volume, SourceBook: c.book, SourceChapter: c.chapter, SourceVerse: srcVerse}
 				switch {
 				case xrefAids[parts[0]]:
@@ -334,6 +333,30 @@ func BuildCrossReferences(gospelRoot string) ([]XrefRow, *XrefSummary, error) {
 	sum.Duration = time.Since(start)
 	return rows, sum, nil
 }
+
+// slashPath turns a stored or local path into forward slashes, whatever OS
+// wrote it (a database indexed on Windows holds backslashes, which
+// filepath.ToSlash leaves alone on Linux).
+func slashPath(p string) string { return strings.ReplaceAll(p, `\`, "/") }
+
+// scripturesRel cleans p and returns its part under eng/scriptures/, matched
+// at the start of the path or after a slash (a relative library root such as
+// "." gives "eng/scriptures/..." with no leading slash).
+func scripturesRel(p string) (string, bool) {
+	tp := path.Clean(slashPath(p))
+	const marker = "eng/scriptures/"
+	if strings.HasPrefix(tp, marker) {
+		return tp[len(marker):], true
+	}
+	if j := strings.Index(tp, "/"+marker); j >= 0 {
+		return tp[j+1+len(marker):], true
+	}
+	return "", false
+}
+
+// xrefRebuildLock serialises cross_references rebuilds across concurrent
+// index passes and admin calls (pg_advisory_xact_lock key).
+const xrefRebuildLock = 0x67650001
 
 func isVolume(s string) bool {
 	for _, v := range xrefVolumes {
@@ -401,6 +424,11 @@ func (idx *Indexer) RebuildCrossReferences(ctx context.Context) (*XrefSummary, e
 		return sum, err
 	}
 	defer tx.Rollback(ctx)
+	// Two rebuilds at once would each DELETE only the rows they can see and
+	// both COPY, doubling the table; the lock makes the second wait its turn.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(xrefRebuildLock)); err != nil {
+		return sum, fmt.Errorf("lock cross_references rebuild: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM cross_references`); err != nil {
 		return sum, fmt.Errorf("clear cross_references: %w", err)
 	}

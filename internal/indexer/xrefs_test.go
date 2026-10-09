@@ -74,3 +74,21 @@ func TestBuildCrossReferencesCorpus(t *testing.T) {
 	}
 	t.Logf("chapters %d, rows %d, by type %v, skipped %v, %s", sum.Chapters, sum.Rows, sum.ByType, sum.Skipped, sum.Duration)
 }
+
+func TestScripturesRel(t *testing.T) {
+	for _, c := range []struct {
+		in, want string
+		ok       bool
+	}{
+		{"/data/gospel-library/eng/scriptures/bofm/ether/12.md", "bofm/ether/12.md", true},
+		{"eng/scriptures/bofm/../nt/heb/11.md", "nt/heb/11.md", true},        // relative root "."
+		{`C:\lib\eng\scriptures\bofm\ether\12.md`, "bofm/ether/12.md", true}, // a Windows-indexed path read on Linux
+		{"/data/gospel-library/eng/general-conference/2024/10/x.md", "", false},
+		{"/data/x/myeng/scriptures/bofm/ether/12.md", "", false}, // not a path segment
+	} {
+		got, ok := scripturesRel(c.in)
+		if got != c.want || ok != c.ok {
+			t.Errorf("scripturesRel(%q) = %q, %v; want %q, %v", c.in, got, ok, c.want, c.ok)
+		}
+	}
+}

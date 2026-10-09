@@ -8,6 +8,7 @@ package indexer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/cpuchip/gospel-engine/internal/db"
@@ -26,7 +28,15 @@ type Indexer struct {
 	GospelLibraryRoot string // /data/gospel-library
 	BooksRoot         string // /data/books
 	LogDir            string // append-only diagnostic logs (parse failures); "" disables
+
+	running atomic.Bool // one IndexAll at a time (startup pass, admin reindex)
 }
+
+// ErrIndexRunning is returned by IndexAll while another pass is in progress.
+var ErrIndexRunning = errors.New("an index pass is already running")
+
+// Busy reports whether an index pass is in progress.
+func (idx *Indexer) Busy() bool { return idx.running.Load() }
 
 // New builds an Indexer.
 func New(database *db.DB, gospelRoot, booksRoot string) *Indexer {
@@ -68,6 +78,10 @@ type Result struct {
 // IndexAll walks both content roots and upserts everything that has changed
 // since the last index (based on file mtime + size).
 func (idx *Indexer) IndexAll(ctx context.Context) (*Result, error) {
+	if !idx.running.CompareAndSwap(false, true) {
+		return nil, ErrIndexRunning
+	}
+	defer idx.running.Store(false)
 	start := time.Now()
 	r := &Result{}
 

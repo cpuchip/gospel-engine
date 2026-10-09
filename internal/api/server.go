@@ -639,6 +639,10 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "indexer not configured", http.StatusServiceUnavailable)
 		return
 	}
+	if s.Indexer.Busy() {
+		http.Error(w, "an index pass is already running", http.StatusConflict)
+		return
+	}
 	force := r.URL.Query().Get("force") == "true"
 	go func() {
 		ctx := context.Background()
