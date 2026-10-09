@@ -62,7 +62,9 @@ func TestParseNodeKeys(t *testing.T) {
 // TestRelatedAgainstPostgres indexes a copy of a real library's scriptures,
 // adds one talk that cites Ether 12:27, rebuilds the graph, and drives
 // /api/related through the real router (GOSPEL_TEST_DATABASE_URL, local only,
-// and GOSPEL_LIBRARY_ROOT; destructive; run with -p 1).
+// and GOSPEL_LIBRARY_ROOT; destructive; run with -p 1). Each database test
+// indexes the scriptures (about 5 minutes on nocix): run one per `go test`,
+// or pass -timeout 30m.
 func TestRelatedAgainstPostgres(t *testing.T) {
 	dsn := testdb.URL(t)
 	lib := os.Getenv("GOSPEL_LIBRARY_ROOT")
@@ -133,7 +135,7 @@ func TestRelatedAgainstPostgres(t *testing.T) {
 
 	// One hop from Ether 12:27: its footnotes (out) and the test talk (in).
 	b := get(url.Values{"reference": {"Ether 12:27"}, "limit": {"200"}})
-	var sawTalk, sawTG, sawVerse bool
+	var sawTalk, sawTG, sawTGList, sawVerse bool
 	for _, r := range b.Results {
 		switch {
 		case r.Kind == "talk" && r.ID == talkID:
@@ -143,9 +145,15 @@ func TestRelatedAgainstPostgres(t *testing.T) {
 				t.Errorf("talk result wrong: %+v via %+v", r, r.Via)
 			}
 		case r.Kind == "study_aid" && strings.HasPrefix(r.Title, "TG "):
-			sawTG = true
-			if r.Via.Edge != "footnote" || r.Via.Direction != "out" {
-				t.Errorf("TG result via %+v", r.Via)
+			// A TG entry is reached two ways: the verse's own footnote points at
+			// it (footnote/out), or the entry lists the verse (tg_ref/in).
+			switch {
+			case r.Via.Edge == "footnote" && r.Via.Direction == "out":
+				sawTG = true
+			case r.Via.Edge == "tg_ref" && r.Via.Direction == "in":
+				sawTGList = true
+			default:
+				t.Errorf("TG result %q via %+v", r.Title, r.Via)
 			}
 		case r.Kind == "verse":
 			sawVerse = true
@@ -157,8 +165,8 @@ func TestRelatedAgainstPostgres(t *testing.T) {
 			t.Errorf("hops=1 walk returned a %d-hop result", r.Hops)
 		}
 	}
-	if !sawTalk || !sawTG || !sawVerse {
-		t.Errorf("one hop: talk %v, TG %v, verse %v; want all", sawTalk, sawTG, sawVerse)
+	if !sawTalk || !sawTG || !sawTGList || !sawVerse {
+		t.Errorf("one hop: talk %v, TG by footnote %v, TG listing the verse %v, verse %v; want all", sawTalk, sawTG, sawTGList, sawVerse)
 	}
 
 	// kinds filter
