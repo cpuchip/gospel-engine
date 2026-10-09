@@ -69,6 +69,8 @@ func (s *Server) Router() http.Handler {
 		g.Delete("/api/admin/tokens/{id}", s.handleRevokeToken)
 		g.Post("/api/admin/reindex", s.handleReindex)
 		g.Post("/api/admin/reparse-speakers", s.handleReparseSpeakers)
+		g.Post("/api/admin/repair-references", s.handleRepairReferences)
+		g.Post("/api/admin/rebuild-xrefs", s.handleRebuildXrefs)
 	})
 
 	return r
@@ -679,6 +681,54 @@ func (s *Server) handleReparseSpeakers(w http.ResponseWriter, r *http.Request) {
 		"missing":     res.Missing,
 		"duration_ms": res.Duration.Milliseconds(),
 	})
+}
+
+// handleRepairReferences rewrites scriptures.reference from the current
+// book-name map where it differs. Synchronous; one UPDATE per book.
+func (s *Server) handleRepairReferences(w http.ResponseWriter, r *http.Request) {
+	if s.Indexer == nil {
+		http.Error(w, "indexer not configured", http.StatusServiceUnavailable)
+		return
+	}
+	res, err := s.Indexer.RepairReferences(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"books":       res.Books,
+		"changed":     res.Changed,
+		"duration_ms": res.Duration.Milliseconds(),
+	})
+}
+
+// handleRebuildXrefs replaces cross_references with a fresh parse of the
+// library's chapter footnotes, in one transaction; a build that fails its
+// checks leaves the table unchanged and answers 500 with the counts.
+func (s *Server) handleRebuildXrefs(w http.ResponseWriter, r *http.Request) {
+	if s.Indexer == nil {
+		http.Error(w, "indexer not configured", http.StatusServiceUnavailable)
+		return
+	}
+	sum, err := s.Indexer.RebuildCrossReferences(r.Context())
+	body := map[string]any{}
+	if sum != nil {
+		body = map[string]any{
+			"rows":              sum.Rows,
+			"chapters":          sum.Chapters,
+			"by_type":           sum.ByType,
+			"skipped":           sum.Skipped,
+			"unmatched_sources": sum.UnmatchedSources,
+			"unmatched_targets": sum.UnmatchedTargets,
+			"duration_ms":       sum.Duration.Milliseconds(),
+		}
+	}
+	if err != nil {
+		body["error"] = err.Error()
+		writeJSON(w, http.StatusInternalServerError, body)
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // ============================================================================

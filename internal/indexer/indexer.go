@@ -59,6 +59,7 @@ type Result struct {
 	ManualsIndexed    int
 	StudyAidsIndexed  int
 	BooksIndexed      int
+	XrefRows          int // cross_references rows after a rebuild; 0 when not rebuilt
 	Skipped           int
 	Errors            int
 	Duration          time.Duration
@@ -75,6 +76,7 @@ func (idx *Indexer) IndexAll(ctx context.Context) (*Result, error) {
 			if err := idx.indexGospelLibrary(ctx, r); err != nil {
 				return r, fmt.Errorf("gospel-library: %w", err)
 			}
+			idx.maybeRebuildCrossReferences(ctx, r)
 		}
 	}
 	if idx.BooksRoot != "" {
@@ -365,17 +367,37 @@ func firstHeading(s string) string {
 }
 
 // formatReference produces a display string like "1 Nephi 3:7" from
-// gospel-library's slugged book names ("1-ne", "matt", "dc"). The mapping
-// for the long tail of book slugs lives in the existing gospel-engine
-// urlgen package; for Phase 1 we use a minimal map and fall back to slug.
+// gospel-library's slugged book names ("1-ne", "matt", "dc").
 func formatReference(bookSlug string, chapter, verse int) string {
-	name := bookDisplayName(bookSlug)
+	name := BookDisplayName(bookSlug)
 	return fmt.Sprintf("%s %d:%d", name, chapter, verse)
 }
 
-// bookDisplayName converts gospel-library book slugs to display names.
-// This list is intentionally minimal; missing entries fall back to the slug.
+// bookNames maps every scripture book slug in gospel-library to its display
+// name. The names come from the library's own chapter headings ("# 1
+// Corinthians 1"), except the entries that were here before the map was
+// completed (D&C, JS—Matthew, Psalms), which keep their established form so
+// existing references do not change. TestBookNamesComplete pins the slug list.
 var bookNames = map[string]string{
+	// Old Testament
+	"gen": "Genesis", "ex": "Exodus", "lev": "Leviticus", "num": "Numbers",
+	"deut": "Deuteronomy", "josh": "Joshua", "judg": "Judges", "ruth": "Ruth",
+	"1-sam": "1 Samuel", "2-sam": "2 Samuel", "1-kgs": "1 Kings", "2-kgs": "2 Kings",
+	"1-chr": "1 Chronicles", "2-chr": "2 Chronicles", "ezra": "Ezra", "neh": "Nehemiah",
+	"esth": "Esther", "job": "Job", "ps": "Psalms", "prov": "Proverbs",
+	"eccl": "Ecclesiastes", "song": "Song of Solomon", "isa": "Isaiah", "jer": "Jeremiah",
+	"lam": "Lamentations", "ezek": "Ezekiel", "dan": "Daniel", "hosea": "Hosea",
+	"joel": "Joel", "amos": "Amos", "obad": "Obadiah", "jonah": "Jonah",
+	"micah": "Micah", "nahum": "Nahum", "hab": "Habakkuk", "zeph": "Zephaniah",
+	"hag": "Haggai", "zech": "Zechariah", "mal": "Malachi",
+	// New Testament
+	"matt": "Matthew", "mark": "Mark", "luke": "Luke", "john": "John",
+	"acts": "Acts", "rom": "Romans", "1-cor": "1 Corinthians", "2-cor": "2 Corinthians",
+	"gal": "Galatians", "eph": "Ephesians", "philip": "Philippians", "col": "Colossians",
+	"1-thes": "1 Thessalonians", "2-thes": "2 Thessalonians", "1-tim": "1 Timothy", "2-tim": "2 Timothy",
+	"titus": "Titus", "philem": "Philemon", "heb": "Hebrews", "james": "James",
+	"1-pet": "1 Peter", "2-pet": "2 Peter", "1-jn": "1 John", "2-jn": "2 John",
+	"3-jn": "3 John", "jude": "Jude", "rev": "Revelation",
 	// Book of Mormon
 	"1-ne": "1 Nephi", "2-ne": "2 Nephi", "jacob": "Jacob", "enos": "Enos",
 	"jarom": "Jarom", "omni": "Omni", "w-of-m": "Words of Mormon",
@@ -387,15 +409,11 @@ var bookNames = map[string]string{
 	// Pearl of Great Price
 	"moses": "Moses", "abr": "Abraham", "js-m": "JS—Matthew",
 	"js-h": "Joseph Smith—History", "a-of-f": "Articles of Faith",
-	// Old Testament (samples — full map TODO)
-	"gen": "Genesis", "ex": "Exodus", "lev": "Leviticus", "num": "Numbers",
-	"deut": "Deuteronomy", "ps": "Psalms", "isa": "Isaiah", "mal": "Malachi",
-	// New Testament (samples)
-	"matt": "Matthew", "mark": "Mark", "luke": "Luke", "john": "John",
-	"acts": "Acts", "rom": "Romans", "rev": "Revelation",
 }
 
-func bookDisplayName(slug string) string {
+// BookDisplayName converts a gospel-library book slug to its display name,
+// falling back to the slug for anything unknown.
+func BookDisplayName(slug string) string {
 	if v, ok := bookNames[slug]; ok {
 		return v
 	}
