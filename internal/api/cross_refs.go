@@ -3,14 +3,16 @@ package api
 import (
 	"context"
 	"fmt"
+
+	"github.com/cpuchip/gospel-engine/internal/indexer"
 )
 
 // xrefRow is one cross-reference attached to a verse result.
 //
-// `reference` is the human-readable target ("Hebrews 7:11" or "heb 7"). It is
-// resolved from scriptures.reference when the target verse exists, with a
-// fallback constructed from the abbreviation when it doesn't (chapter-only
-// xrefs, or rare cases where the target verse hasn't been indexed yet).
+// `reference` is the human-readable target, from xrefLabel: the verse's own
+// scriptures.reference ("Hebrews 7:11"), the study aid's title ("TG Grace",
+// "BD Aaron", "JST, Revelation 2"), or the book's display name and chapter for
+// a chapter-level target ("Psalms 119").
 type xrefRow struct {
 	Reference     string `json:"reference"`
 	ReferenceType string `json:"reference_type,omitempty"`
@@ -50,14 +52,8 @@ SELECT DISTINCT ON (cr.target_volume, cr.target_book, cr.target_chapter, cr.targ
     cr.target_chapter,
     cr.target_verse,
     cr.reference_type,
-    COALESCE(
-        s.reference,
-        cr.target_book || ' ' || cr.target_chapter::text ||
-            CASE WHEN cr.target_verse IS NOT NULL
-                 THEN ':' || cr.target_verse::text
-                 ELSE ''
-            END
-    ) AS target_reference
+    s.reference,
+    sa.title
 FROM cross_references cr
 JOIN src
   ON cr.source_volume  = src.volume
@@ -68,6 +64,12 @@ LEFT JOIN scriptures s
   ON s.book    = cr.target_book
  AND s.chapter = cr.target_chapter
  AND s.verse   = cr.target_verse
+LEFT JOIN study_aids sa
+  ON cr.reference_type IN ('tg', 'bd', 'gs', 'jst')
+ AND sa.aid_type = cr.target_volume
+ AND sa.slug = CASE WHEN cr.target_volume = 'jst'
+                    THEN cr.target_book || '/' || cr.target_chapter::text
+                    ELSE cr.target_book END
 ORDER BY cr.target_volume, cr.target_book, cr.target_chapter,
          cr.target_verse NULLS FIRST, cr.reference_type
 `
@@ -81,13 +83,15 @@ ORDER BY cr.target_volume, cr.target_book, cr.target_chapter,
 	var out []xrefRow
 	for rows.Next() {
 		var (
-			x      xrefRow
-			tVerse *int32
-			refTyp *string
+			x        xrefRow
+			tVerse   *int32
+			refTyp   *string
+			verseRef *string
+			aidTitle *string
 		)
 		if err := rows.Scan(
 			&x.TargetVolume, &x.TargetBook, &x.TargetChapter,
-			&tVerse, &refTyp, &x.Reference,
+			&tVerse, &refTyp, &verseRef, &aidTitle,
 		); err != nil {
 			return nil, fmt.Errorf("cross_references scan: %w", err)
 		}
@@ -98,10 +102,43 @@ ORDER BY cr.target_volume, cr.target_book, cr.target_chapter,
 		if refTyp != nil {
 			x.ReferenceType = *refTyp
 		}
+		x.Reference = xrefLabel(x, deref(verseRef), deref(aidTitle))
 		out = append(out, x)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("cross_references iterate: %w", err)
 	}
 	return out, nil
+}
+
+func deref(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+// aidPrefix names a study aid in a label; JST titles already carry "JST,".
+var aidPrefix = map[string]string{"tg": "TG ", "bd": "BD ", "gs": "GS "}
+
+// xrefLabel is the display text for one cross-reference target.
+func xrefLabel(x xrefRow, verseRef, aidTitle string) string {
+	switch x.ReferenceType {
+	case "tg", "bd", "gs", "jst":
+		if aidTitle != "" {
+			return aidPrefix[x.ReferenceType] + aidTitle
+		}
+		if x.ReferenceType == "jst" {
+			return fmt.Sprintf("JST %s %d", x.TargetBook, x.TargetChapter)
+		}
+		return aidPrefix[x.ReferenceType] + x.TargetBook
+	}
+	if verseRef != "" {
+		return verseRef
+	}
+	ref := fmt.Sprintf("%s %d", indexer.BookDisplayName(x.TargetBook), x.TargetChapter)
+	if x.TargetVerse != nil {
+		ref += fmt.Sprintf(":%d", *x.TargetVerse)
+	}
+	return ref
 }

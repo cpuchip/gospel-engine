@@ -4,9 +4,11 @@ package auth
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/cpuchip/gospel-engine/internal/db"
+	"github.com/cpuchip/gospel-engine/internal/ratelimit"
 )
 
 type contextKey string
@@ -29,9 +31,12 @@ func isInternalTrusted(ctx context.Context) bool {
 	return v
 }
 
-// Middleware returns an HTTP middleware that validates `Authorization: Bearer stdy_…`.
-// devMode bypasses auth entirely (local testing only).
-func Middleware(database *db.DB, devMode bool) func(http.Handler) http.Handler {
+// Middleware returns an HTTP middleware that validates `Authorization: Bearer stdy_…`
+// and spends one request from the token's rate-limit bucket (429 with
+// Retry-After when it is empty; lim nil disables limiting). devMode bypasses
+// auth entirely (local testing only); in-process trusted calls were already
+// counted where they entered (/mcp) and are not counted again.
+func Middleware(database *db.DB, devMode bool, lim *ratelimit.Limiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if devMode || isInternalTrusted(r.Context()) {
@@ -56,6 +61,10 @@ func Middleware(database *db.DB, devMode bool) func(http.Handler) http.Handler {
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return
 			}
+			if !Spend(w, lim, tok) {
+				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+				return
+			}
 			// Best-effort, rate-limited touch (never blocks the request).
 			database.TouchAPITokenIfStale(tok)
 
@@ -64,6 +73,32 @@ func Middleware(database *db.DB, devMode bool) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// Spend takes one request from tok's bucket. When the bucket is empty it sets
+// Retry-After on w and returns false; the caller writes the 429 body in its
+// own error format. A nil limiter always allows. An admin token gets at least
+// AdminRateFloor: admin tokens are minted only inside the container, and one of
+// them is ibeco.me's service token, which carries every ibeco.me reader's
+// scripture lookups (a 60/min bucket would throttle them all together); a
+// floor rather than no limit still bounds what a leaked admin token can do.
+func Spend(w http.ResponseWriter, lim *ratelimit.Limiter, tok *db.APIToken) bool {
+	if lim == nil || tok == nil {
+		return true
+	}
+	limit := tok.RateLimit
+	if tok.IsAdmin {
+		limit = max(limit, AdminRateFloor)
+	}
+	ok, wait := lim.Allow(tok.ID, limit)
+	if !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(ratelimit.RetryAfterSeconds(wait)))
+	}
+	return ok
+}
+
+// AdminRateFloor is the lowest per-minute limit an admin token gets (100 a
+// second), well above ibeco.me's lookup traffic and far below abuse.
+const AdminRateFloor = 6000
 
 // FromContext returns the APIToken associated with the request, if any.
 func FromContext(ctx context.Context) *db.APIToken {

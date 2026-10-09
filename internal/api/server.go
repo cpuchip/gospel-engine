@@ -18,6 +18,7 @@ import (
 	"github.com/cpuchip/gospel-engine/internal/db"
 	"github.com/cpuchip/gospel-engine/internal/embed"
 	"github.com/cpuchip/gospel-engine/internal/indexer"
+	"github.com/cpuchip/gospel-engine/internal/ratelimit"
 	"github.com/cpuchip/gospel-engine/internal/search"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -31,8 +32,9 @@ type Server struct {
 	Cfg      *config.Config
 	DB       *db.DB
 	Searcher *search.Searcher
-	Embed    *embed.Client    // always set (even when semantic is disabled for search); used for live health pings
-	Indexer  *indexer.Indexer // optional; required for /api/admin/reparse-speakers
+	Embed    *embed.Client      // always set (even when semantic is disabled for search); used for live health pings
+	Indexer  *indexer.Indexer   // optional; required for /api/admin/reparse-speakers
+	Limiter  *ratelimit.Limiter // per-key rate limits; nil disables them (main always sets one)
 	Started  time.Time
 }
 
@@ -54,7 +56,7 @@ func (s *Server) Router() http.Handler {
 
 	// Authenticated API.
 	r.Group(func(g chi.Router) {
-		g.Use(auth.Middleware(s.DB, s.Cfg.DevMode))
+		g.Use(auth.Middleware(s.DB, s.Cfg.DevMode, s.Limiter))
 		g.Get("/api/search", s.handleSearch)
 		g.Get("/api/get", s.handleGet)
 		g.Get("/api/list", s.handleList)
@@ -62,13 +64,15 @@ func (s *Server) Router() http.Handler {
 
 	// Admin: authenticated AND an admin token. Ordinary tokens get 403 here.
 	r.Group(func(g chi.Router) {
-		g.Use(auth.Middleware(s.DB, s.Cfg.DevMode))
+		g.Use(auth.Middleware(s.DB, s.Cfg.DevMode, s.Limiter))
 		g.Use(auth.RequireAdmin(s.Cfg.DevMode))
 		g.Post("/api/admin/tokens", s.handleCreateToken)
 		g.Get("/api/admin/tokens", s.handleListTokens)
 		g.Delete("/api/admin/tokens/{id}", s.handleRevokeToken)
 		g.Post("/api/admin/reindex", s.handleReindex)
 		g.Post("/api/admin/reparse-speakers", s.handleReparseSpeakers)
+		g.Post("/api/admin/repair-references", s.handleRepairReferences)
+		g.Post("/api/admin/rebuild-xrefs", s.handleRebuildXrefs)
 	})
 
 	return r
@@ -635,6 +639,10 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "indexer not configured", http.StatusServiceUnavailable)
 		return
 	}
+	if s.Indexer.Busy() {
+		http.Error(w, "an index pass is already running", http.StatusConflict)
+		return
+	}
 	force := r.URL.Query().Get("force") == "true"
 	go func() {
 		ctx := context.Background()
@@ -679,6 +687,54 @@ func (s *Server) handleReparseSpeakers(w http.ResponseWriter, r *http.Request) {
 		"missing":     res.Missing,
 		"duration_ms": res.Duration.Milliseconds(),
 	})
+}
+
+// handleRepairReferences rewrites scriptures.reference from the current
+// book-name map where it differs. Synchronous; one UPDATE per book.
+func (s *Server) handleRepairReferences(w http.ResponseWriter, r *http.Request) {
+	if s.Indexer == nil {
+		http.Error(w, "indexer not configured", http.StatusServiceUnavailable)
+		return
+	}
+	res, err := s.Indexer.RepairReferences(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"books":       res.Books,
+		"changed":     res.Changed,
+		"duration_ms": res.Duration.Milliseconds(),
+	})
+}
+
+// handleRebuildXrefs replaces cross_references with a fresh parse of the
+// library's chapter footnotes, in one transaction; a build that fails its
+// checks leaves the table unchanged and answers 500 with the counts.
+func (s *Server) handleRebuildXrefs(w http.ResponseWriter, r *http.Request) {
+	if s.Indexer == nil {
+		http.Error(w, "indexer not configured", http.StatusServiceUnavailable)
+		return
+	}
+	sum, err := s.Indexer.RebuildCrossReferences(r.Context())
+	body := map[string]any{}
+	if sum != nil {
+		body = map[string]any{
+			"rows":              sum.Rows,
+			"chapters":          sum.Chapters,
+			"by_type":           sum.ByType,
+			"skipped":           sum.Skipped,
+			"unmatched_sources": sum.UnmatchedSources,
+			"unmatched_targets": sum.UnmatchedTargets,
+			"duration_ms":       sum.Duration.Milliseconds(),
+		}
+	}
+	if err != nil {
+		body["error"] = err.Error()
+		writeJSON(w, http.StatusInternalServerError, body)
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // ============================================================================
