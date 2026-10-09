@@ -35,6 +35,10 @@ For a substrate bridge that resolves `$env:` placeholders, the URL can carry one
 
 The `gospel-mcp` binary is a thin stdio bridge that translates MCP JSON-RPC into the server's REST API (`/api/search`, `/api/get`, `/api/list`) using a `Bearer stdy_…` token (`GOSPEL_ENGINE_TOKEN`). It still works and is self-updating; the cross-compiled binaries are served from `/download/gospel-mcp-{os}-{arch}`. Prefer the remote HTTP MCP above unless you specifically need a local process.
 
+## Rate limits
+
+Each `stdy_` token carries a rate limit (`api_tokens.rate_limit`, default 60 requests a minute), enforced per token across the REST API and `/mcp` together: a bucket of that many requests that refills at that rate. An empty bucket answers `429 Too Many Requests` with `Retry-After` in seconds. The legacy shared `GOSPEL_MCP_KEY` is not limited. Buckets live in memory, so a restart refills them.
+
 ## Search and semantic embeddings
 
 Search runs entirely server-side, so semantic results are identical whether the caller used the HTTP MCP endpoint, the stdio client, or the REST API. Query-time embeddings use an OpenAI-compatible backend (`EMBEDDING_URL`, default `nomic-embed-text-v1.5`); when that backend is unreachable, keyword and hybrid search still work and semantic degrades gracefully (see `/api/health`).
