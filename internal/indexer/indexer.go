@@ -70,6 +70,7 @@ type Result struct {
 	StudyAidsIndexed  int
 	BooksIndexed      int
 	XrefRows          int // cross_references rows after a rebuild; 0 when not rebuilt
+	GraphEdges        int // distinct graph links after a rebuild; 0 when not rebuilt
 	Skipped           int
 	Errors            int
 	Duration          time.Duration
@@ -91,6 +92,7 @@ func (idx *Indexer) IndexAll(ctx context.Context) (*Result, error) {
 				return r, fmt.Errorf("gospel-library: %w", err)
 			}
 			idx.maybeRebuildCrossReferences(ctx, r)
+			idx.maybeRebuildGraph(ctx, r)
 		}
 	}
 	if idx.BooksRoot != "" {
