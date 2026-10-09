@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cpuchip/gospel-engine/internal/auth"
+	"github.com/cpuchip/gospel-engine/internal/citations"
 	"github.com/cpuchip/gospel-engine/internal/config"
 	"github.com/cpuchip/gospel-engine/internal/db"
 	"github.com/cpuchip/gospel-engine/internal/embed"
@@ -29,13 +30,14 @@ var indexHTML []byte
 
 // Server holds the dependencies the handlers need.
 type Server struct {
-	Cfg      *config.Config
-	DB       *db.DB
-	Searcher *search.Searcher
-	Embed    *embed.Client      // always set (even when semantic is disabled for search); used for live health pings
-	Indexer  *indexer.Indexer   // optional; required for /api/admin/reparse-speakers
-	Limiter  *ratelimit.Limiter // per-key rate limits; nil disables them (main always sets one)
-	Started  time.Time
+	Cfg       *config.Config
+	DB        *db.DB
+	Searcher  *search.Searcher
+	Embed     *embed.Client      // always set (even when semantic is disabled for search); used for live health pings
+	Indexer   *indexer.Indexer   // optional; required for /api/admin/reparse-speakers
+	Limiter   *ratelimit.Limiter // per-key rate limits; nil disables them (main always sets one)
+	Citations *citations.Client  // BYU Scripture Citation Index lookups; nil answers 503
+	Started   time.Time
 }
 
 // Router builds the full chi router.
@@ -61,6 +63,7 @@ func (s *Server) Router() http.Handler {
 		g.Get("/api/get", s.handleGet)
 		g.Get("/api/list", s.handleList)
 		g.Get("/api/related", s.handleRelated)
+		g.Get("/api/citations", s.handleCitations)
 	})
 
 	// Admin: authenticated AND an admin token. Ordinary tokens get 403 here.

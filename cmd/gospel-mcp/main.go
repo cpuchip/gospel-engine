@@ -229,6 +229,13 @@ func (c *client) dispatchTool(name string, args json.RawMessage) (string, error)
 		}
 		return c.callJSON("GET", "/api/related?"+q.Encode(), nil)
 
+	case "gospel_citations":
+		var a struct {
+			Reference string `json:"reference"`
+		}
+		_ = json.Unmarshal(args, &a)
+		return c.callJSON("GET", "/api/citations?"+url.Values{"reference": {a.Reference}}.Encode(), nil)
+
 	case "gospel_list":
 		var a struct {
 			Type string `json:"type"`
@@ -350,6 +357,17 @@ var tools = []map[string]any{
 				"kinds":     map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"verses", "talks", "manuals", "aids"}}, "description": "Subset of: verses, talks, manuals, aids (default all)"},
 				"limit":     map[string]any{"type": "integer", "description": "Max results (default 30, cap 200)"},
 			},
+		},
+	},
+	{
+		"name":        "gospel_citations",
+		"description": "Who has cited a verse: General Conference talks, Journal of Discourses and other sources, answered live by the BYU Scripture Citation Index (scriptures.byu.edu) and kept for a day. Each citation has the index's locator (e.g. \"1989-O:54\"), speaker, title, a link to it in the index, and for conference talks a link to the talk at churchofjesuschrist.org. The data is BYU's.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"reference": map[string]any{"type": "string", "description": "A verse or verse range: \"Ether 12:27\", \"D&C 93:24-30\"."},
+			},
+			"required": []string{"reference"},
 		},
 	},
 	{

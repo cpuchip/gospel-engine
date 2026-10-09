@@ -16,6 +16,7 @@ import (
 
 	"github.com/cpuchip/gospel-engine/internal/api"
 	"github.com/cpuchip/gospel-engine/internal/auth"
+	"github.com/cpuchip/gospel-engine/internal/citations"
 	"github.com/cpuchip/gospel-engine/internal/config"
 	"github.com/cpuchip/gospel-engine/internal/db"
 	"github.com/cpuchip/gospel-engine/internal/embed"
@@ -118,13 +119,14 @@ func run() error {
 
 	// --- HTTP server ---
 	srv := &api.Server{
-		Cfg:      cfg,
-		DB:       database,
-		Searcher: search.NewSearcher(database, embedder, embedOK, cfg.EmbedReprobe, cfg.LinkMode, cfg.GospelLibraryPath),
-		Embed:    embedder,
-		Indexer:  idx,
-		Limiter:  ratelimit.New(),
-		Started:  time.Now(),
+		Cfg:       cfg,
+		DB:        database,
+		Searcher:  search.NewSearcher(database, embedder, embedOK, cfg.EmbedReprobe, cfg.LinkMode, cfg.GospelLibraryPath),
+		Embed:     embedder,
+		Indexer:   idx,
+		Limiter:   ratelimit.New(),
+		Citations: citations.New(cfg.CitationContact, cfg.Version),
+		Started:   time.Now(),
 	}
 	apiRouter := srv.Router()
 

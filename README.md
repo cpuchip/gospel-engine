@@ -6,7 +6,7 @@ The hosted server runs at **engine.ibeco.me**: a PostgreSQL + pgvector backend w
 
 ## Using it as an MCP server
 
-The same four tools — `gospel_search`, `gospel_get`, `gospel_related`, `gospel_list` — are available two ways:
+The same five tools — `gospel_search`, `gospel_get`, `gospel_related`, `gospel_citations`, `gospel_list` — are available two ways:
 
 ### 1. Remote HTTP MCP (recommended — no local binary)
 
@@ -33,11 +33,15 @@ For a substrate bridge that resolves `$env:` placeholders, the URL can carry one
 
 ### 2. Local stdio client (`gospel-mcp`)
 
-The `gospel-mcp` binary is a thin stdio bridge that translates MCP JSON-RPC into the server's REST API (`/api/search`, `/api/get`, `/api/related`, `/api/list`) using a `Bearer stdy_…` token (`GOSPEL_ENGINE_TOKEN`). It still works and is self-updating; the cross-compiled binaries are served from `/download/gospel-mcp-{os}-{arch}`. Prefer the remote HTTP MCP above unless you specifically need a local process.
+The `gospel-mcp` binary is a thin stdio bridge that translates MCP JSON-RPC into the server's REST API (`/api/search`, `/api/get`, `/api/related`, `/api/citations`, `/api/list`) using a `Bearer stdy_…` token (`GOSPEL_ENGINE_TOKEN`). It still works and is self-updating; the cross-compiled binaries are served from `/download/gospel-mcp-{os}-{arch}`. Prefer the remote HTTP MCP above unless you specifically need a local process.
 
 ## Related passages (`gospel_related`)
 
 `/api/related` walks the links the library itself makes, with no model involved: chapter footnotes (the same rows as `gospel_get ... cross_refs`), the verse lists of Topical Guide, Bible Dictionary and Guide to the Scriptures entries, and the scripture citations in each conference-talk and manual paragraph. Seed it with a `reference` (verse, range or chapter) or with `type` (`talks`, `manuals`, `study_aids`) and `id`; `hops` is 1 or 2, `kinds` narrows to `verses`, `talks`, `manuals`, `aids`. Results are ranked by hops, then by how many links reach them, and each carries `via` (the first link's type and direction, and on two hops the passage in between). The edges live in `graph_edges`, rebuilt after every index pass that changed content (`POST /api/admin/rebuild-graph` rebuilds on demand).
+
+## Citations (`gospel_citations`)
+
+`/api/citations?reference=Ether 12:27` (a verse or a verse range) answers who has cited it, live, from the [BYU Scripture Citation Index](https://scriptures.byu.edu/). The data is BYU's; every response says so (`source`, `source_url`) and every citation links back to it in the index (`index_url`), and to the talk at churchofjesuschrist.org when the index gives one (`talk_url`). The engine is a light client: one upstream request per uncached lookup, a User-Agent naming the engine and a contact address (`CITATION_CONTACT`), answers kept for a day (at most 5,000), no crawling or pre-fetching, and the per-token rate limit in front.
 
 ## Rate limits
 

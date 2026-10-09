@@ -18,7 +18,7 @@ func TestToolsAdvertiseReadOnly(t *testing.T) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	want := []string{"gospel_get", "gospel_list", "gospel_related", "gospel_search"}
+	want := []string{"gospel_citations", "gospel_get", "gospel_list", "gospel_related", "gospel_search"}
 	if len(names) != len(want) {
 		t.Fatalf("registered tools = %v, want %v", names, want)
 	}
@@ -49,8 +49,11 @@ func TestToolsAdvertiseReadOnly(t *testing.T) {
 		if a.IdempotentHint != nil && !*a.IdempotentHint {
 			t.Errorf("%s: idempotentHint = false, want true", name)
 		}
-		if a.OpenWorldHint != nil && *a.OpenWorldHint {
-			t.Errorf("%s: openWorldHint = true, want false", name)
+		// gospel_citations asks BYU's site, so it is honestly open-world; every
+		// other tool reads only the engine's own corpus.
+		wantOpen := name == "gospel_citations"
+		if a.OpenWorldHint != nil && *a.OpenWorldHint != wantOpen {
+			t.Errorf("%s: openWorldHint = %v, want %v", name, *a.OpenWorldHint, wantOpen)
 		}
 	}
 }
