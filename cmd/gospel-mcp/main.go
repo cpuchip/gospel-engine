@@ -201,6 +201,34 @@ func (c *client) dispatchTool(name string, args json.RawMessage) (string, error)
 		}
 		return c.callJSON("GET", "/api/get?"+q.Encode(), nil)
 
+	case "gospel_related":
+		var a struct {
+			Reference string   `json:"reference"`
+			Type      string   `json:"type"`
+			ID        int64    `json:"id"`
+			Hops      int      `json:"hops"`
+			Kinds     []string `json:"kinds"`
+			Limit     int      `json:"limit"`
+		}
+		_ = json.Unmarshal(args, &a)
+		q := url.Values{}
+		if a.Reference != "" {
+			q.Set("reference", a.Reference)
+		} else {
+			q.Set("type", a.Type)
+			q.Set("id", fmt.Sprint(a.ID))
+		}
+		if a.Hops > 0 {
+			q.Set("hops", fmt.Sprint(a.Hops))
+		}
+		if len(a.Kinds) > 0 {
+			q.Set("kinds", strings.Join(a.Kinds, ","))
+		}
+		if a.Limit > 0 {
+			q.Set("limit", fmt.Sprint(a.Limit))
+		}
+		return c.callJSON("GET", "/api/related?"+q.Encode(), nil)
+
 	case "gospel_list":
 		var a struct {
 			Type string `json:"type"`
@@ -306,6 +334,21 @@ var tools = []map[string]any{
 					"type":        "boolean",
 					"description": "Include footnote-derived cross-references for returned verses (opt-in; default false). Ignored for chapter and type+id lookups.",
 				},
+			},
+		},
+	},
+	{
+		"name":        "gospel_related",
+		"description": "Passages the library itself links to a passage, one or two hops out: chapter footnotes, Topical Guide / Bible Dictionary / Guide to the Scriptures entries, and the scripture citations in conference talks and manuals. Seed with a scripture `reference` (verse, range, or chapter) or with `type` (talks, manuals, study_aids) + `id`. Each result says how it was reached (via.edge, via.direction: out = the seed's own link, in = a link pointing at the seed; via.through names the passage in between on a two-hop result). Ranked by hops, then by how many links reach it.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"reference": map[string]any{"type": "string", "description": "Scripture reference: \"Ether 12:27\", \"D&C 93:24-30\", \"Mosiah 4\"."},
+				"type":      map[string]any{"type": "string", "enum": []string{"talks", "manuals", "study_aids"}},
+				"id":        map[string]any{"type": "integer"},
+				"hops":      map[string]any{"type": "integer", "description": "1 (default) or 2"},
+				"kinds":     map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"verses", "talks", "manuals", "aids"}}, "description": "Subset of: verses, talks, manuals, aids (default all)"},
+				"limit":     map[string]any{"type": "integer", "description": "Max results (default 30, cap 200)"},
 			},
 		},
 	},

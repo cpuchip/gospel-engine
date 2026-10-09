@@ -53,6 +53,9 @@ func copyTree(t *testing.T, src, dst string) {
 //   - /api/get with cross_refs labels aid rows from study_aids ("TG …") and
 //     never prints the old "grace 0" fallback;
 //   - a key with rate_limit 2 gets 429 with Retry-After on its third request.
+//
+// It indexes the scriptures (about 5 minutes on nocix): run it on its own or
+// pass -timeout 30m.
 func TestV3FixesAgainstPostgres(t *testing.T) {
 	dsn := testdb.URL(t)
 	lib := os.Getenv("GOSPEL_LIBRARY_ROOT")
