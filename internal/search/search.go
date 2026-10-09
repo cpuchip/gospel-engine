@@ -402,7 +402,7 @@ func (s *Searcher) keyword(ctx context.Context, opt Options) ([]Result, error) {
 // then enriches each row with metadata from the appropriate source table. The
 // caller passes the embeddings client resolved by semanticClient (never nil).
 func (s *Searcher) semantic(ctx context.Context, client *embed.Client, opt Options) ([]Result, error) {
-	vec, err := client.Embed(ctx, opt.Query)
+	vec, err := client.EmbedQuery(ctx, opt.Query)
 	if err != nil {
 		return nil, fmt.Errorf("embedding query: %w", err)
 	}

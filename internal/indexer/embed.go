@@ -114,7 +114,7 @@ func (idx *Indexer) embedVerses(ctx context.Context, embedder *embed.Client) (in
 		if ctx.Err() != nil {
 			return count, ctx.Err()
 		}
-		vec, err := embedder.Embed(ctx, j.text)
+		vec, err := embedder.EmbedDocument(ctx, j.text)
 		if err != nil {
 			log.Printf("embed verses: id=%d failed: %v", j.id, err)
 			continue
@@ -189,7 +189,7 @@ func (idx *Indexer) embedTextRows(
 		}
 		paragraphs := splitParagraphs(j.text)
 		for pIdx, p := range paragraphs {
-			vec, err := embedder.Embed(ctx, p)
+			vec, err := embedder.EmbedDocument(ctx, p)
 			if err != nil {
 				if errCount != nil {
 					*errCount++

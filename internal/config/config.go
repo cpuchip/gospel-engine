@@ -58,7 +58,12 @@ type Config struct {
 	GoogleClientSecret string
 	GoogleRedirectURL  string
 	CookieSecure       bool
-	DevMode            bool // disables auth — local dev only
+	// EmbedTaskPrefixes names the query/document prefix preset sent to the
+	// embedding model (embed.SetTaskPrefixes): "" or "none" = text as-is (the
+	// engine before v3), "nomic-v1.5" = nomic's card prefixes. It must match how
+	// the live embeddings table was built. Env EMBED_TASK_PREFIXES.
+	EmbedTaskPrefixes string
+	DevMode           bool // disables auth — local dev only
 }
 
 func Load() (*Config, error) {
@@ -83,6 +88,7 @@ func Load() (*Config, error) {
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 		GoogleRedirectURL:  os.Getenv("GOOGLE_REDIRECT_URL"),
 		CookieSecure:       envBool("COOKIE_SECURE", true),
+		EmbedTaskPrefixes:  env("EMBED_TASK_PREFIXES", ""),
 		DevMode:            envBool("DEV_MODE", false),
 	}
 	if c.DatabaseURL == "" {
