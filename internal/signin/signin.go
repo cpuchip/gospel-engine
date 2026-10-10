@@ -3,13 +3,16 @@
 //
 // It follows ibeco.me's sign-in (scripts/becoming internal/auth): the same
 // Google OAuth client from the same env names, the authorization-code flow
-// with a one-time CSRF state that expires in 5 minutes, a server-side session
-// of 30 days in an HttpOnly, Secure, SameSite=Lax cookie, sign-out deleting
-// the row. Two deliberate differences, both narrower: the scope is
-// "openid email" (no name, no picture), and the cookie is host-only
-// ("engine_session", no Domain) so it never travels to other ibeco.me hosts.
-// After sign-in the redirect is always /keys: there is no redirect parameter
-// to abuse.
+// with a one-time state that expires in 5 minutes, a server-side session of
+// 30 days in an HttpOnly, Secure, SameSite=Lax cookie, sign-out deleting the
+// row. Deliberate differences, all narrower: the scope is "openid email" (no
+// name, no picture); the cookies are host-only and, over HTTPS, "__Host-"
+// prefixed, so no other ibeco.me host can set or read them; and the OAuth
+// state is bound to the browser that started the sign-in (an HMAC-signed
+// cookie checked at the callback), so a callback link cannot sign someone
+// into another person's account, and no server-side state map exists to flood
+// or to lose across instances. After sign-in the redirect is always /keys:
+// there is no redirect parameter to abuse.
 //
 // Keys minted here are ordinary api_tokens (never admin), owned as
 // external_user "google:<sub>", at most 10 live per person, 60 requests a
@@ -18,6 +21,7 @@ package signin
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -33,7 +37,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -42,7 +45,6 @@ import (
 )
 
 const (
-	cookieName     = "engine_session"
 	sessionLife    = 30 * 24 * time.Hour
 	stateLife      = 5 * time.Minute
 	maxLiveKeys    = 10
@@ -77,9 +79,6 @@ type Handler struct {
 	UserInfoURL string
 	HTTP        *http.Client
 	now         func() time.Time
-
-	mu     sync.Mutex
-	states map[string]time.Time
 }
 
 // New returns a handler with Google's real endpoints.
@@ -92,7 +91,6 @@ func New(database *db.DB, cfg Config) *Handler {
 		UserInfoURL: "https://www.googleapis.com/oauth2/v3/userinfo",
 		HTTP:        &http.Client{Timeout: 15 * time.Second},
 		now:         time.Now,
-		states:      map[string]time.Time{},
 	}
 }
 
@@ -119,6 +117,42 @@ func randomHex(n int) string {
 		panic(err) // crypto/rand failing is not recoverable
 	}
 	return hex.EncodeToString(b)
+}
+
+// cookie names: "__Host-" over HTTPS (the browser then refuses the cookie
+// unless Secure, Path=/ and no Domain), the bare name for local http.
+func (h *Handler) cookie(name string) string {
+	if h.Cfg.CookieSecure {
+		return "__Host-" + name
+	}
+	return name
+}
+
+func (h *Handler) setCookie(w http.ResponseWriter, name, value string, maxAge int) {
+	http.SetCookie(w, &http.Cookie{Name: h.cookie(name), Value: value, Path: "/", HttpOnly: true,
+		Secure: h.Cfg.CookieSecure, SameSite: http.SameSiteLaxMode, MaxAge: maxAge})
+}
+
+// signState makes the browser-bound state value "state.expiry.mac", keyed by
+// the client secret (stable across restarts and instances, never sent).
+func (h *Handler) signState(state string, exp int64) string {
+	m := hmac.New(sha256.New, []byte("engine-oauth-state:"+h.Cfg.ClientSecret))
+	fmt.Fprintf(m, "%s.%d", state, exp)
+	return fmt.Sprintf("%s.%d.%s", state, exp, hex.EncodeToString(m.Sum(nil)))
+}
+
+// checkState reports whether the state cookie is ours, unexpired and names
+// the state Google returned.
+func (h *Handler) checkState(cookieVal, state string) bool {
+	parts := strings.Split(cookieVal, ".")
+	if len(parts) != 3 || state == "" || parts[0] != state {
+		return false
+	}
+	exp, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || h.now().Unix() >= exp {
+		return false
+	}
+	return hmac.Equal([]byte(h.signState(parts[0], exp)), []byte(cookieVal))
 }
 
 func hashToken(t string) string {
@@ -157,7 +191,7 @@ type session struct {
 
 // currentSession returns the signed-in session, or nil.
 func (h *Handler) currentSession(ctx context.Context, r *http.Request) *session {
-	c, err := r.Cookie(cookieName)
+	c, err := r.Cookie(h.cookie("engine_session"))
 	if err != nil || len(c.Value) != 64 {
 		return nil
 	}
@@ -182,7 +216,18 @@ func (h *Handler) keys(w http.ResponseWriter, r *http.Request) {
 		h.render(w, http.StatusOK, "keys.html", nil)
 		return
 	}
-	h.renderKeys(w, r, s, http.StatusOK, nil)
+	var extra map[string]any
+	if c, err := r.Cookie(h.cookie("engine_newkey")); err == nil {
+		// set by createKey, read once and cleared: a reload neither shows the
+		// key again nor creates another
+		h.setCookie(w, "engine_newkey", "", -1)
+		if name, key, ok := strings.Cut(c.Value, "|"); ok && strings.HasPrefix(key, db.TokenPrefix) {
+			if n, err := url.QueryUnescape(name); err == nil {
+				extra = map[string]any{"NewKey": key, "NewKeyName": n}
+			}
+		}
+	}
+	h.renderKeys(w, r, s, http.StatusOK, extra)
 }
 
 func (h *Handler) renderKeys(w http.ResponseWriter, r *http.Request, s *session, status int, extra map[string]any) {
@@ -237,6 +282,7 @@ func (h *Handler) checkPost(w http.ResponseWriter, r *http.Request) *session {
 	}
 	s := h.currentSession(r.Context(), r)
 	if s == nil {
+		h.setCookie(w, "engine_session", "", -1)
 		http.Redirect(w, r, "/keys", http.StatusSeeOther)
 		return nil
 	}
@@ -268,24 +314,20 @@ func (h *Handler) createKey(w http.ResponseWriter, r *http.Request) {
 		t := h.now().Add(time.Duration(n) * 24 * time.Hour)
 		expires = &t
 	}
-	owner := ownerPrefix + s.sub
-	live, err := h.DB.CountLiveAPITokensByOwner(r.Context(), owner)
-	if err != nil {
-		log.Printf("signin: count keys: %v", err)
-		h.renderKeys(w, r, s, http.StatusInternalServerError, map[string]any{"Error": "Could not create the key; try again."})
+	_, raw, err := h.DB.CreateOwnedAPIToken(r.Context(), ownerPrefix+s.sub, name, expires, keyRateLimit, maxLiveKeys)
+	if errors.Is(err, db.ErrTooManyTokens) {
+		h.renderKeys(w, r, s, http.StatusConflict, map[string]any{"Error": fmt.Sprintf("You have %d live keys, the most allowed. Revoke one first.", maxLiveKeys)})
 		return
 	}
-	if live >= maxLiveKeys {
-		h.renderKeys(w, r, s, http.StatusConflict, map[string]any{"Error": fmt.Sprintf("You have %d live keys, the most allowed. Revoke one first.", live)})
-		return
-	}
-	_, raw, err := h.DB.CreateAPIToken(r.Context(), owner, name, expires, keyRateLimit, false)
 	if err != nil {
 		log.Printf("signin: create key: %v", err)
 		h.renderKeys(w, r, s, http.StatusInternalServerError, map[string]any{"Error": "Could not create the key; try again."})
 		return
 	}
-	h.renderKeys(w, r, s, http.StatusOK, map[string]any{"NewKey": raw, "NewKeyName": name})
+	// Post-redirect-get: the key rides one short-lived cookie to the next page
+	// view and is cleared there. It is never stored on the server.
+	h.setCookie(w, "engine_newkey", url.QueryEscape(name)+"|"+raw, 120)
+	http.Redirect(w, r, "/keys", http.StatusSeeOther)
 }
 
 func (h *Handler) revokeKey(w http.ResponseWriter, r *http.Request) {
@@ -314,17 +356,12 @@ func (h *Handler) deleteAccount(w http.ResponseWriter, r *http.Request) {
 		h.renderKeys(w, r, s, http.StatusBadRequest, map[string]any{"Error": "Type delete in the box to confirm."})
 		return
 	}
-	if _, err := h.DB.DeleteAPITokensByOwner(r.Context(), ownerPrefix+s.sub); err != nil {
-		log.Printf("signin: delete keys: %v", err)
+	if err := h.DB.DeleteOwnerAccount(r.Context(), ownerPrefix+s.sub, s.userID); err != nil { // sessions cascade
+		log.Printf("signin: delete account: %v", err)
 		h.renderKeys(w, r, s, http.StatusInternalServerError, map[string]any{"Error": "Could not delete the account; try again."})
 		return
 	}
-	if _, err := h.DB.Pool.Exec(r.Context(), `DELETE FROM users WHERE id = $1`, s.userID); err != nil { // sessions cascade
-		log.Printf("signin: delete user: %v", err)
-		h.renderKeys(w, r, s, http.StatusInternalServerError, map[string]any{"Error": "Could not delete the account; try again."})
-		return
-	}
-	h.clearCookie(w)
+	h.setCookie(w, "engine_session", "", -1)
 	h.render(w, http.StatusOK, "keys.html", map[string]any{"Notice": "Your account and all its keys are deleted."})
 }
 
@@ -336,18 +373,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := randomHex(16)
-	now := h.now()
-	h.mu.Lock()
-	for k, exp := range h.states {
-		if !now.Before(exp) {
-			delete(h.states, k)
-		}
-	}
-	if len(h.states) > 10000 { // a flood of abandoned logins: start over rather than grow
-		h.states = map[string]time.Time{}
-	}
-	h.states[state] = now.Add(stateLife)
-	h.mu.Unlock()
+	h.setCookie(w, "engine_oauth", h.signState(state, h.now().Add(stateLife).Unix()), int(stateLife/time.Second))
 	q := url.Values{
 		"client_id":     {h.Cfg.ClientID},
 		"redirect_uri":  {h.Cfg.RedirectURL},
@@ -358,14 +384,6 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		"prompt":        {"select_account"},
 	}
 	http.Redirect(w, r, h.AuthURL+"?"+q.Encode(), http.StatusFound)
-}
-
-func (h *Handler) takeState(state string) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	exp, ok := h.states[state]
-	delete(h.states, state)
-	return ok && h.now().Before(exp)
 }
 
 type userInfo struct {
@@ -380,7 +398,9 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	if !h.takeState(q.Get("state")) {
+	c, err := r.Cookie(h.cookie("engine_oauth"))
+	h.setCookie(w, "engine_oauth", "", -1) // one use, whatever happens next
+	if err != nil || !h.checkState(c.Value, q.Get("state")) {
 		h.render(w, http.StatusBadRequest, "keys.html", map[string]any{"Error": "That sign-in link expired. Try again."})
 		return
 	}
@@ -409,7 +429,8 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := randomHex(32)
-	if _, err := h.DB.Pool.Exec(r.Context(), `DELETE FROM sessions WHERE user_id = $1 AND expires_at <= $2`, userID, h.now()); err != nil {
+	// every sign-in prunes expired sessions (everyone's), so none outlives its 30 days by long
+	if _, err := h.DB.Pool.Exec(r.Context(), `DELETE FROM sessions WHERE expires_at <= $1`, h.now()); err != nil {
 		log.Printf("signin: prune sessions: %v", err)
 	}
 	if _, err := h.DB.Pool.Exec(r.Context(),
@@ -419,8 +440,7 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		h.render(w, http.StatusInternalServerError, "keys.html", map[string]any{"Error": "Could not sign you in; try again."})
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: token, Path: "/", HttpOnly: true, Secure: h.Cfg.CookieSecure,
-		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionLife / time.Second)})
+	h.setCookie(w, "engine_session", token, int(sessionLife/time.Second))
 	http.Redirect(w, r, "/keys", http.StatusFound)
 }
 
@@ -479,11 +499,6 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.DB.Pool.Exec(r.Context(), `DELETE FROM sessions WHERE token_hash = $1`, s.hash); err != nil {
 		log.Printf("signin: logout: %v", err)
 	}
-	h.clearCookie(w)
+	h.setCookie(w, "engine_session", "", -1)
 	http.Redirect(w, r, "/keys", http.StatusSeeOther)
-}
-
-func (h *Handler) clearCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", HttpOnly: true, Secure: h.Cfg.CookieSecure,
-		SameSite: http.SameSiteLaxMode, MaxAge: -1})
 }

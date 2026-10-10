@@ -48,7 +48,7 @@ func (s *Server) Router() http.Handler {
 
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
+	r.Use(redactingLogger) // chi's logger, with credentials and OAuth codes removed from the logged URL
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 

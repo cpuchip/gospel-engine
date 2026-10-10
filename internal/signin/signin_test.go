@@ -48,6 +48,22 @@ func TestPagesRenderWithoutADatabase(t *testing.T) {
 		q.Get("redirect_uri") != "https://engine.example/auth/google/callback" {
 		t.Errorf("login redirect %d %s", rec.Code, loc)
 	}
+	sc := rec.Result().Cookies()
+	if len(sc) != 1 || sc[0].Name != "engine_oauth" || !sc[0].HttpOnly || !strings.HasPrefix(sc[0].Value, q.Get("state")+".") {
+		t.Errorf("login state cookie: %+v", sc)
+	}
+	h.Cfg.CookieSecure = true
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/google/login", nil))
+	if sc := rec.Result().Cookies(); len(sc) != 1 || sc[0].Name != "__Host-engine_oauth" || !sc[0].Secure || sc[0].Domain != "" {
+		t.Errorf("over HTTPS the state cookie must be __Host- and Secure: %+v", sc)
+	}
+	// a forged or tampered state cookie fails
+	good := h.signState("abc", time.Now().Add(time.Minute).Unix())
+	if !h.checkState(good, "abc") || h.checkState(good, "abd") || h.checkState(strings.Replace(good, "abc", "abd", 1), "abd") ||
+		h.checkState(h.signState("abc", time.Now().Add(-time.Second).Unix()), "abc") {
+		t.Error("state signing does not hold")
+	}
 }
 
 // fakeGoogle answers the token and userinfo calls for one code.
@@ -193,6 +209,25 @@ func TestFlowAgainstPostgres(t *testing.T) {
 	}
 	if code, _ := post(alice, "/keys", url.Values{"csrf": {csrf}, "name": {"one too many"}}); code != http.StatusConflict {
 		t.Errorf("11th live key: %d, want 409", code)
+	}
+
+	// Login CSRF: a callback link minted in the attacker's browser does not
+	// sign the victim in (the state is bound to the browser that started it).
+	attackerSite, attacker := newSite("sub-mallory", "mallory@example.org", true)
+	resp, _ = attacker.Get(attackerSite.URL + "/auth/google/login")
+	loc, _ := url.Parse(resp.Header.Get("Location"))
+	resp.Body.Close()
+	jarV, _ := cookiejar.New(nil)
+	victim := &http.Client{Jar: jarV}
+	resp, _ = victim.Get(attackerSite.URL + "/auth/google/callback?" + url.Values{"state": {loc.Query().Get("state")}, "code": {"good-code"}}.Encode())
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("callback replayed in another browser: %d, want 400", resp.StatusCode)
+	}
+	resp.Body.Close()
+	var malloryRows int
+	_ = d.Pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE google_sub = 'sub-mallory'`).Scan(&malloryRows)
+	if malloryRows != 0 {
+		t.Error("the replayed callback created a session for the attacker's account")
 	}
 
 	// A sign-in link works once; an unverified email is refused.
