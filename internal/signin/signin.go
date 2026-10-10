@@ -15,7 +15,7 @@
 // there is no redirect parameter to abuse.
 //
 // Keys minted here are ordinary api_tokens (never admin), owned as
-// external_user "google:<sub>", at most 10 live per person, 60 requests a
+// external_user "google:<sub>", at most 10 live per person, 600 requests a
 // minute each (enforced by the engine's rate limiter).
 package signin
 
@@ -48,7 +48,7 @@ const (
 	sessionLife    = 30 * 24 * time.Hour
 	stateLife      = 5 * time.Minute
 	maxLiveKeys    = 10
-	keyRateLimit   = 60
+	keyRateLimit   = 600 // ruled 2026-10-10: aligned with ibeco.me's per-user keys
 	ownerPrefix    = "google:"
 	maxKeyNameRune = 60
 )
