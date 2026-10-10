@@ -1,0 +1,68 @@
+{{template "head" "Your keys"}}
+<h1>Your API keys</h1>
+<p class="muted">Keys for the engine's API and its hosted MCP connection. Each key is yours alone and can be revoked here at any time.</p>
+
+{{if .Error}}<div class="panel error">{{.Error}}</div>{{end}}
+{{if .Notice}}<div class="panel notice">{{.Notice}}</div>{{end}}
+
+{{if .Email}}
+  <p>Signed in as <strong>{{.Email}}</strong>.
+    <form class="inline" method="post" action="/auth/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="quiet" type="submit">Sign out</button></form>
+  </p>
+
+  {{if .NewKey}}
+  <div class="panel notice">
+    <strong>New key "{{.NewKeyName}}"</strong>. Copy it now: it is shown only once, and only a one-way hash of it is kept.
+    <code class="key">{{.NewKey}}</code>
+    <span class="muted">Hosted MCP: <code>https://engine.ibeco.me/mcp?key={{.NewKey}}</code></span>
+  </div>
+  {{end}}
+
+  <h2>Create a key</h2>
+  {{if lt .Live .Max}}
+  <form method="post" action="/keys" class="row">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="text" name="name" placeholder="What it is for (e.g. laptop, claude.ai)" maxlength="60" required>
+    <select name="expires_days">
+      <option value="0">never expires</option>
+      <option value="30">expires in 30 days</option>
+      <option value="90">expires in 90 days</option>
+      <option value="365">expires in a year</option>
+    </select>
+    <button type="submit">Create</button>
+  </form>
+  <p class="muted">{{.Live}} of {{.Max}} live keys. Each key may make {{.RateLimit}} requests a minute; over that the engine answers 429 and says how long to wait.</p>
+  {{else}}
+  <p>You have {{.Live}} live keys, the most allowed. Revoke one to create another.</p>
+  {{end}}
+
+  <h2>Your keys</h2>
+  {{if .Keys}}
+  <div class="scroll"><table>
+    <tr><th>Name</th><th>Key starts</th><th>Created</th><th>Last used</th><th>Expires</th><th>Status</th><th></th></tr>
+    {{range .Keys}}
+    <tr>
+      <td>{{.Name}}</td><td><code>{{.Prefix}}…</code></td><td>{{.Created}}</td><td>{{.LastUsed}}</td><td>{{.Expires}}</td><td>{{.Status}}</td>
+      <td>{{if .Live}}<form class="inline" method="post" action="/keys/{{.ID}}/revoke"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button class="quiet" type="submit">Revoke</button></form>{{end}}</td>
+    </tr>
+    {{end}}
+  </table></div>
+  {{else}}
+  <p class="muted">No keys yet.</p>
+  {{end}}
+
+  <h2>Delete your account</h2>
+  <form method="post" action="/account/delete" class="row">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="text" name="confirm" placeholder="type delete" autocomplete="off">
+    <button class="danger" type="submit">Delete account and all keys</button>
+  </form>
+  <p class="muted">This removes your account, your sessions and every key you made here, at once. Keys made through ibeco.me are managed there.</p>
+{{else if .Enabled}}
+  <div class="panel">
+    <p>Sign in with Google to create, see and revoke your keys. The engine asks Google only for your account ID and email address.</p>
+    <p><a href="/auth/google/login"><button type="button">Sign in with Google</button></a></p>
+    <p class="muted">By signing in you accept how this site handles your data: <a href="/privacy">privacy</a>.</p>
+  </div>
+{{end}}
+{{template "foot"}}

@@ -24,6 +24,7 @@ import (
 	"github.com/cpuchip/gospel-engine/internal/mcpserver"
 	"github.com/cpuchip/gospel-engine/internal/ratelimit"
 	"github.com/cpuchip/gospel-engine/internal/search"
+	"github.com/cpuchip/gospel-engine/internal/signin"
 )
 
 func main() {
@@ -126,7 +127,11 @@ func run() error {
 		Indexer:   idx,
 		Limiter:   ratelimit.New(),
 		Citations: citations.New(cfg.CitationContact, cfg.Version),
-		Started:   time.Now(),
+		Signin: signin.New(database, signin.Config{
+			ClientID: cfg.GoogleClientID, ClientSecret: cfg.GoogleClientSecret, RedirectURL: cfg.GoogleRedirectURL,
+			CookieSecure: cfg.CookieSecure, Contact: cfg.CitationContact,
+		}),
+		Started: time.Now(),
 	}
 	apiRouter := srv.Router()
 

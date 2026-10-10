@@ -21,6 +21,7 @@ import (
 	"github.com/cpuchip/gospel-engine/internal/indexer"
 	"github.com/cpuchip/gospel-engine/internal/ratelimit"
 	"github.com/cpuchip/gospel-engine/internal/search"
+	"github.com/cpuchip/gospel-engine/internal/signin"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -37,6 +38,7 @@ type Server struct {
 	Indexer   *indexer.Indexer   // optional; required for /api/admin/reparse-speakers
 	Limiter   *ratelimit.Limiter // per-key rate limits; nil disables them (main always sets one)
 	Citations *citations.Client  // BYU Scripture Citation Index lookups; nil answers 503
+	Signin    *signin.Handler    // Google sign-in, the key page and /privacy; nil serves none of them
 	Started   time.Time
 }
 
@@ -46,7 +48,7 @@ func (s *Server) Router() http.Handler {
 
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
+	r.Use(redactingLogger) // chi's logger, with credentials and OAuth codes removed from the logged URL
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 
@@ -55,6 +57,12 @@ func (s *Server) Router() http.Handler {
 	r.Get("/api/health", s.handleHealth)
 	r.Get("/api/version", s.handleVersion)
 	r.Get("/download/{filename}", s.handleDownload)
+
+	// Sign-in, the key page and the privacy notice: public pages, their own
+	// session cookie, no bearer token.
+	if s.Signin != nil {
+		s.Signin.Mount(r)
+	}
 
 	// Authenticated API.
 	r.Group(func(g chi.Router) {

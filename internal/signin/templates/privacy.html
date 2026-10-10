@@ -1,0 +1,20 @@
+{{template "head" "Privacy"}}
+<h1>Privacy</h1>
+<p class="muted">engine.ibeco.me · effective October 2026</p>
+
+<h2>Signing in</h2>
+<p>Signing in with Google asks Google only for your account ID and email address (the "openid email" scope: no name, no contacts, no other Google data), and those two are all this site keeps. We use them only to keep your account and your API keys. Google's consent screen names ibeco.me, because this site shares ibeco.me's sign-in client.</p>
+
+<h2>What we keep</h2>
+<p>For a signed-in account: your Google account ID and email, when you signed up and last signed in, and a session (a one-way hash of the cookie's value, which lasts 30 days or until you sign out; expired sessions are deleted). For each key: its name, a one-way hash of the key (the key itself is shown to you once and never stored), when it was created, an expiry if you set one, and roughly when it was last used.</p>
+<p>Like most web servers, the engine writes a line to its log for each request: the time, the address it came from, the path and query asked for (for example your search words or the reference you looked up), the response status and size. Sign-in codes and keys are removed from those lines before they are written. The logs stay on the server, are used only to run and fix the service, and older ones are dropped as the service is redeployed.</p>
+
+<h2>What we don't do</h2>
+<p>We do not sell, share or advertise with any of it. There are no analytics trackers, advertising pixels or third-party scripts on this site. Its only cookies are its own, sent only to engine.ibeco.me: the session cookie, one that lasts five minutes while you sign in, and one that carries a new key to the page that shows it once.</p>
+
+<h2>Other services the engine asks</h2>
+<p>Citation lookups are passed to the <a href="https://scriptures.byu.edu/">BYU Scripture Citation Index</a>: the engine sends it the scripture reference you asked about, never your key or account. Its answers are kept for a day.</p>
+
+<h2>Deleting your account</h2>
+<p>To delete your account and keys, sign in and choose Delete account on <a href="/keys">your keys</a> page; deletion is immediate. Or write to {{if .Contact}}<a href="mailto:{{.Contact}}">{{.Contact}}</a>{{else}}the site's owner{{end}}.</p>
+{{template "foot"}}

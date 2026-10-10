@@ -216,3 +216,114 @@ func randomHex(n int) (string, error) {
 	}
 	return hex.EncodeToString(b), nil
 }
+
+// ListAPITokensByOwner returns the tokens owned by externalUser, newest first.
+func (d *DB) ListAPITokensByOwner(ctx context.Context, externalUser string) ([]*APIToken, error) {
+	rows, err := d.Pool.Query(ctx, `
+		SELECT id, COALESCE(external_user,''), name, prefix,
+		       created_at, last_used, expires_at, rate_limit, revoked, is_admin
+		FROM api_tokens
+		WHERE external_user = $1
+		ORDER BY created_at DESC
+	`, externalUser)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tokens []*APIToken
+	for rows.Next() {
+		t := &APIToken{}
+		if err := rows.Scan(&t.ID, &t.ExternalUser, &t.Name, &t.Prefix,
+			&t.CreatedAt, &t.LastUsed, &t.ExpiresAt, &t.RateLimit, &t.Revoked, &t.IsAdmin); err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, t)
+	}
+	return tokens, rows.Err()
+}
+
+// RevokeOwnedAPIToken revokes token id only if externalUser owns it; pgx.ErrNoRows otherwise.
+func (d *DB) RevokeOwnedAPIToken(ctx context.Context, id int64, externalUser string) error {
+	tag, err := d.Pool.Exec(ctx, `UPDATE api_tokens SET revoked = TRUE WHERE id = $1 AND external_user = $2`, id, externalUser)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// ErrTooManyTokens is returned when an owner already has the most live tokens allowed.
+var ErrTooManyTokens = errors.New("too many live tokens")
+
+// CreateOwnedAPIToken issues an ordinary token for externalUser if it has
+// fewer than maxLive live tokens. The count and the insert run in one
+// transaction under a per-owner advisory lock, so parallel requests cannot
+// pass the cap together, and an account deletion (which takes the same lock)
+// cannot interleave with them.
+func (d *DB) CreateOwnedAPIToken(ctx context.Context, externalUser, name string, expiresAt *time.Time, rateLimit, maxLive int) (*APIToken, string, error) {
+	if name == "" || externalUser == "" {
+		return nil, "", errors.New("token name and owner are required")
+	}
+	rawSecret, err := randomHex(32)
+	if err != nil {
+		return nil, "", err
+	}
+	full := TokenPrefix + rawSecret
+	hash, err := bcrypt.GenerateFromPassword([]byte(full), bcryptCost)
+	if err != nil {
+		return nil, "", fmt.Errorf("hashing token: %w", err)
+	}
+	tx, err := d.Pool.Begin(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, externalUser); err != nil {
+		return nil, "", err
+	}
+	var live int
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*) FROM api_tokens
+		WHERE external_user = $1 AND NOT revoked AND (expires_at IS NULL OR expires_at > NOW())
+	`, externalUser).Scan(&live); err != nil {
+		return nil, "", err
+	}
+	if live >= maxLive {
+		return nil, "", ErrTooManyTokens
+	}
+	t := &APIToken{ExternalUser: externalUser, Name: name, Prefix: full[:12], ExpiresAt: expiresAt, RateLimit: rateLimit}
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO api_tokens (external_user, name, prefix, token_hash, expires_at, rate_limit, is_admin)
+		VALUES ($1, $2, $3, $4, $5, $6, FALSE)
+		RETURNING id, created_at
+	`, externalUser, name, t.Prefix, string(hash), expiresAt, rateLimit).Scan(&t.ID, &t.CreatedAt); err != nil {
+		return nil, "", fmt.Errorf("inserting token: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, "", err
+	}
+	return t, full, nil
+}
+
+// DeleteOwnerAccount deletes every token externalUser owns and the users row
+// userID (sessions cascade) in one transaction under the owner's advisory
+// lock, so no key can be created between the two deletes.
+func (d *DB) DeleteOwnerAccount(ctx context.Context, externalUser string, userID int64) error {
+	tx, err := d.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, externalUser); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM api_tokens WHERE external_user = $1`, externalUser); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
