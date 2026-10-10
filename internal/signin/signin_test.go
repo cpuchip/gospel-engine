@@ -169,7 +169,7 @@ func TestFlowAgainstPostgres(t *testing.T) {
 		t.Fatalf("create key: %d, no key shown", code)
 	}
 	tok, err := d.ValidateAPIToken(ctx, m[1])
-	if err != nil || tok == nil || tok.ExternalUser != "google:sub-alice" || tok.IsAdmin || tok.RateLimit != 60 || tok.ExpiresAt == nil {
+	if err != nil || tok == nil || tok.ExternalUser != "google:sub-alice" || tok.IsAdmin || tok.RateLimit != 600 || tok.ExpiresAt == nil {
 		t.Errorf("minted token: %+v %v", tok, err)
 	}
 	if strings.Count(page, m[1]) != 2 { // the key and the MCP URL, once each, on this page only

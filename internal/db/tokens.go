@@ -44,7 +44,7 @@ func (d *DB) CreateAPIToken(ctx context.Context, externalUser, name string, expi
 		return nil, "", errors.New("token name is required")
 	}
 	if rateLimit <= 0 {
-		rateLimit = 60
+		rateLimit = 600 // the column default (migration 007)
 	}
 
 	rawSecret, err := randomHex(32) // 64 hex chars

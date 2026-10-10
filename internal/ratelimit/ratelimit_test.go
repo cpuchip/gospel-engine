@@ -88,8 +88,8 @@ func TestZeroLimitMeansDefault(t *testing.T) {
 		}
 		n++
 	}
-	if n != 60 {
-		t.Errorf("rate_limit 0 allowed %d, want the default 60", n)
+	if n != 600 {
+		t.Errorf("rate_limit 0 allowed %d, want the default 600", n)
 	}
 }
 

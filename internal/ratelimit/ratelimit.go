@@ -35,11 +35,11 @@ func New() *Limiter {
 
 // Allow spends one request from key id's bucket, whose capacity and refill
 // are perMinute. It returns false and how long until a request would be
-// allowed when the bucket is empty. perMinute <= 0 means 60, the column's
+// allowed when the bucket is empty. perMinute <= 0 means 600, the column's
 // default.
 func (l *Limiter) Allow(id int64, perMinute int) (bool, time.Duration) {
 	if perMinute <= 0 {
-		perMinute = 60
+		perMinute = 600
 	}
 	capacity := float64(perMinute)
 	perSecond := capacity / 60
