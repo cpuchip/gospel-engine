@@ -50,28 +50,40 @@ type Config struct {
 	// asks the BYU Scripture Citation Index, so the index can reach a person.
 	// Env CITATION_CONTACT.
 	CitationContact string
-	DevMode         bool // disables auth — local dev only
+	// Google sign-in for the key page (internal/signin): the same OAuth client
+	// ibeco.me uses. Unset GoogleClientID leaves sign-in off. Env
+	// GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URL; COOKIE_SECURE
+	// (default true) is false only for local http development.
+	GoogleClientID     string
+	GoogleClientSecret string
+	GoogleRedirectURL  string
+	CookieSecure       bool
+	DevMode            bool // disables auth — local dev only
 }
 
 func Load() (*Config, error) {
 	c := &Config{
-		ListenAddr:        env("LISTEN_ADDR", ":8080"),
-		DatabaseURL:       env("GOSPEL_DB", "postgres://gospel:gospel@localhost:5432/gospel?sslmode=disable"),
-		EmbeddingURL:      env("EMBEDDING_URL", "http://localhost:1234/v1"),
-		EmbeddingModel:    env("EMBEDDING_MODEL", "nomic-embed-text-v1.5"),
-		GospelLibraryPath: env("GOSPEL_LIBRARY_PATH", "/data/gospel-library"),
-		LinkMode:          env("GOSPEL_LINK_MODE", "both"),
-		BooksPath:         env("BOOKS_PATH", "/data/books"),
-		EmbeddingsPath:    env("EMBEDDINGS_PATH", "/data/embeddings"),
-		MCPBinariesPath:   env("MCP_BINARIES_PATH", "/opt/mcp-binaries"),
-		Version:           env("VERSION", "dev"),
-		LogDir:            env("GOSPEL_LOG_DIR", "/data/logs"),
-		IndexOnStartup:    envBool("INDEX_ON_STARTUP", true),
-		BulkLoadEmbeds:    envBool("BULK_LOAD_EMBEDDINGS", true),
-		EmbedRequestTimeo: time.Duration(envInt("EMBED_TIMEOUT_SECONDS", 60)) * time.Second,
-		EmbedReprobe:      time.Duration(envInt("EMBED_REPROBE_SECONDS", 60)) * time.Second,
-		CitationContact:   env("CITATION_CONTACT", "stuffleberryco+privacy@gmail.com"),
-		DevMode:           envBool("DEV_MODE", false),
+		ListenAddr:         env("LISTEN_ADDR", ":8080"),
+		DatabaseURL:        env("GOSPEL_DB", "postgres://gospel:gospel@localhost:5432/gospel?sslmode=disable"),
+		EmbeddingURL:       env("EMBEDDING_URL", "http://localhost:1234/v1"),
+		EmbeddingModel:     env("EMBEDDING_MODEL", "nomic-embed-text-v1.5"),
+		GospelLibraryPath:  env("GOSPEL_LIBRARY_PATH", "/data/gospel-library"),
+		LinkMode:           env("GOSPEL_LINK_MODE", "both"),
+		BooksPath:          env("BOOKS_PATH", "/data/books"),
+		EmbeddingsPath:     env("EMBEDDINGS_PATH", "/data/embeddings"),
+		MCPBinariesPath:    env("MCP_BINARIES_PATH", "/opt/mcp-binaries"),
+		Version:            env("VERSION", "dev"),
+		LogDir:             env("GOSPEL_LOG_DIR", "/data/logs"),
+		IndexOnStartup:     envBool("INDEX_ON_STARTUP", true),
+		BulkLoadEmbeds:     envBool("BULK_LOAD_EMBEDDINGS", true),
+		EmbedRequestTimeo:  time.Duration(envInt("EMBED_TIMEOUT_SECONDS", 60)) * time.Second,
+		EmbedReprobe:       time.Duration(envInt("EMBED_REPROBE_SECONDS", 60)) * time.Second,
+		CitationContact:    env("CITATION_CONTACT", "stuffleberryco+privacy@gmail.com"),
+		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
+		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
+		GoogleRedirectURL:  os.Getenv("GOOGLE_REDIRECT_URL"),
+		CookieSecure:       envBool("COOKIE_SECURE", true),
+		DevMode:            envBool("DEV_MODE", false),
 	}
 	if c.DatabaseURL == "" {
 		return nil, fmt.Errorf("GOSPEL_DB is required")

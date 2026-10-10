@@ -54,6 +54,17 @@ Attribution: Strong's Concordance (James Strong, 1890; public domain) via OpenSc
 glosses: STEPBible TBESH/TBESG, Tyndale House (CC BY 4.0). KJV with Strong's numbers: CrossWire Bible Society's KJV module
 (GPL; OT Strong's from The Bible Foundation; NT from the KJV2003 Project).
 
+## Sign-in and the key page (`/keys`, `/privacy`)
+
+People sign in with Google at `/keys` and create (shown once), see and revoke their own `stdy_` keys there; `/privacy`
+states what is kept. It follows ibeco.me's sign-in: the same OAuth client, a one-time state that expires in 5 minutes,
+30-day server-side sessions (only a hash of the cookie's value is stored) in an HttpOnly, Secure, SameSite=Lax,
+host-only `engine_session` cookie. The scope is `openid email` only. Keys minted here are ordinary (never admin),
+owned as `google:<sub>`, at most 10 live per person, 60 requests a minute each. Deleting the account removes its keys,
+sessions and user row at once. Configure with `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URL`
+(`https://<host>/auth/google/callback`, registered on the client); unset, sign-in is off and `/privacy` still serves.
+`COOKIE_SECURE=false` only for local http. Tables: migration `006_signin.sql`.
+
 ## Rate limits
 
 Each `stdy_` token carries a rate limit (`api_tokens.rate_limit`, default 60 requests a minute), enforced per token across the REST API and `/mcp` together: a bucket of that many requests that refills at that rate. An empty bucket answers `429 Too Many Requests` with `Retry-After` in seconds. Admin tokens (minted only inside the container; ibeco.me's service token is one, and it carries every ibeco.me reader's lookups) get at least 6,000 a minute; the legacy shared `GOSPEL_MCP_KEY` is not limited. Buckets live in memory, so a restart refills them.

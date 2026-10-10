@@ -1,0 +1,20 @@
+{{template "head" "Privacy"}}
+<h1>Privacy</h1>
+<p class="muted">engine.ibeco.me · effective October 2026</p>
+
+<h2>Signing in</h2>
+<p>Signing in with Google gives this site your Google account ID and email address, and nothing else: no name, no picture, no contacts, no other Google data. We use them only to keep your account and your API keys.</p>
+
+<h2>What we keep</h2>
+<p>For a signed-in account: your Google account ID and email, when you signed up and last signed in, and a session (a one-way hash of the cookie's value, kept for up to 30 days or until you sign out). For each key: its name, a one-way hash of the key (the key itself is shown to you once and never stored), when it was created, an expiry if you set one, and roughly when it was last used.</p>
+<p>Like most web servers, the engine writes a line to its log for each API request: the time, the address it came from, the path and query asked for (for example your search words or the reference you looked up), the response status and size. The engine does not write keys to it. These logs are for running and fixing the service.</p>
+
+<h2>What we don't do</h2>
+<p>We do not sell, share or advertise with any of it. There are no analytics trackers, advertising pixels or third-party scripts on this site, and no cookie other than the session cookie, which is sent only to engine.ibeco.me.</p>
+
+<h2>Other services the engine asks</h2>
+<p>Citation lookups are passed to the <a href="https://scriptures.byu.edu/">BYU Scripture Citation Index</a>: the engine sends it the scripture reference you asked about, never your key or account. Its answers are kept for a day.</p>
+
+<h2>Deleting your account</h2>
+<p>To delete your account and keys, sign in and choose Delete account on <a href="/keys">your keys</a> page; deletion is immediate. Or write to {{if .Contact}}<a href="mailto:{{.Contact}}">{{.Contact}}</a>{{else}}the site's owner{{end}}.</p>
+{{template "foot"}}

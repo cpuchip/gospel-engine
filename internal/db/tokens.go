@@ -216,3 +216,59 @@ func randomHex(n int) (string, error) {
 	}
 	return hex.EncodeToString(b), nil
 }
+
+// ListAPITokensByOwner returns the tokens owned by externalUser, newest first.
+func (d *DB) ListAPITokensByOwner(ctx context.Context, externalUser string) ([]*APIToken, error) {
+	rows, err := d.Pool.Query(ctx, `
+		SELECT id, COALESCE(external_user,''), name, prefix,
+		       created_at, last_used, expires_at, rate_limit, revoked, is_admin
+		FROM api_tokens
+		WHERE external_user = $1
+		ORDER BY created_at DESC
+	`, externalUser)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tokens []*APIToken
+	for rows.Next() {
+		t := &APIToken{}
+		if err := rows.Scan(&t.ID, &t.ExternalUser, &t.Name, &t.Prefix,
+			&t.CreatedAt, &t.LastUsed, &t.ExpiresAt, &t.RateLimit, &t.Revoked, &t.IsAdmin); err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, t)
+	}
+	return tokens, rows.Err()
+}
+
+// CountLiveAPITokensByOwner counts externalUser's unrevoked, unexpired tokens.
+func (d *DB) CountLiveAPITokensByOwner(ctx context.Context, externalUser string) (int, error) {
+	var n int
+	err := d.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM api_tokens
+		WHERE external_user = $1 AND NOT revoked AND (expires_at IS NULL OR expires_at > NOW())
+	`, externalUser).Scan(&n)
+	return n, err
+}
+
+// RevokeOwnedAPIToken revokes token id only if externalUser owns it; pgx.ErrNoRows otherwise.
+func (d *DB) RevokeOwnedAPIToken(ctx context.Context, id int64, externalUser string) error {
+	tag, err := d.Pool.Exec(ctx, `UPDATE api_tokens SET revoked = TRUE WHERE id = $1 AND external_user = $2`, id, externalUser)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// DeleteAPITokensByOwner removes every token externalUser owns (account deletion).
+func (d *DB) DeleteAPITokensByOwner(ctx context.Context, externalUser string) (int64, error) {
+	tag, err := d.Pool.Exec(ctx, `DELETE FROM api_tokens WHERE external_user = $1`, externalUser)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}

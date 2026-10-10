@@ -124,7 +124,7 @@
   </div>
 
   <h2>Configure your MCP client</h2>
-  <p>Download the binary, make it executable (<code>chmod +x gospel-mcp-*</code> on macOS/Linux), then add it to your MCP client. An <a href="https://ibeco.me/settings">API token</a> is required.</p>
+  <p>Download the binary, make it executable (<code>chmod +x gospel-mcp-*</code> on macOS/Linux), then add it to your MCP client. An API token is required: create one on <a href="/keys">your keys</a> page (sign in with Google) or in <a href="https://ibeco.me/settings">ibeco.me settings</a>.</p>
   <pre><code id="mcp-config">{
   "mcpServers": {
     "gospel": {
@@ -141,7 +141,7 @@
   <h2>Hosted MCP: nothing to install</h2>
   <p>Clients that dial a remote MCP server over HTTP can use this engine directly, with no binary and no local setup. In claude.ai that is Customize &gt; Connectors &gt; Add custom connector; give it a name and this URL, with your own token in place of <code>stdy_...</code>:</p>
   <pre><code id="mcp-url">https://engine.ibeco.me/mcp?key=stdy_...</code></pre>
-  <p>Tokens come from <a href="https://ibeco.me/settings">ibeco.me settings</a>, the same ones the binary uses. Each token is yours alone and can be revoked there. The key travels in the URL because most remote connectors cannot send headers; a client that can send them may use <code>Authorization: Bearer stdy_...</code> against the same address instead. Same tools either way: <code>gospel_search</code>, <code>gospel_get</code>, <code>gospel_related</code>, <code>gospel_citations</code>, <code>gospel_list</code>, and Strong's: <code>strongs_define</code>, <code>strongs_search</code>, <code>strongs_for_verse</code>.</p>
+  <p>Tokens come from <a href="/keys">your keys</a> page here (sign in with Google) or from <a href="https://ibeco.me/settings">ibeco.me settings</a>, the same ones the binary uses. Each token is yours alone and can be revoked where it was made. The key travels in the URL because most remote connectors cannot send headers; a client that can send them may use <code>Authorization: Bearer stdy_...</code> against the same address instead. Same tools either way: <code>gospel_search</code>, <code>gospel_get</code>, <code>gospel_related</code>, <code>gospel_citations</code>, <code>gospel_list</code>, and Strong's: <code>strongs_define</code>, <code>strongs_search</code>, <code>strongs_for_verse</code>.</p>
 
   <h2>API</h2>
   <p>Bearer-token authenticated endpoints:</p>
@@ -159,7 +159,7 @@ GET /api/list?type=scriptures</code></pre>
   <p>Each personal token has a rate limit, 60 requests a minute unless it was set higher, shared by the API and the hosted MCP. Over it, the server answers <code>429 Too Many Requests</code> with a <code>Retry-After</code> header giving the seconds to wait.</p>
 
   <footer>
-    gospel-engine · <a href="/api/health">health</a> · <a href="/api/version">version</a>
+    gospel-engine · <a href="/keys">your keys</a> · <a href="/privacy">privacy</a> · <a href="/api/health">health</a> · <a href="/api/version">version</a>
   </footer>
 </div>
 
