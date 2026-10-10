@@ -788,21 +788,26 @@ func (s *Server) handleRebuildXrefs(w http.ResponseWriter, r *http.Request) {
 // handleRepairEmbeddings re-embeds every talk/manual/book row whose paragraph
 // embeddings disagree with its text (partial, stale or shrunk) and every verse
 // embedded from other text. Long-running: 202, with progress and the result in
-// the log.
+// the log. ?dry=true logs the counts and changes nothing.
 func (s *Server) handleRepairEmbeddings(w http.ResponseWriter, r *http.Request) {
 	if s.Indexer == nil || s.Embed == nil {
 		http.Error(w, "indexer or embedder not configured", http.StatusServiceUnavailable)
 		return
 	}
+	dry := r.URL.Query().Get("dry") == "true"
+	label := "embed repair"
+	if dry {
+		label = "embed repair (dry run)"
+	}
 	go func() {
-		log.Printf("embed repair: starting (triggered by API)")
-		res, err := s.Indexer.RepairEmbeddings(context.Background(), s.Embed)
+		log.Printf("%s: starting (triggered by API)", label)
+		res, err := s.Indexer.RepairEmbeddings(context.Background(), s.Embed, dry)
 		if err != nil {
-			log.Printf("embed repair: failed: %v", err)
+			log.Printf("%s: failed: %v", label, err)
 			return
 		}
-		log.Printf("embed repair: done checked=%d partial=%d stale=%d shrunk=%d stale_verses=%d repaired=%d failed=%d",
-			res.Checked, res.Partial, res.Stale, res.Shrunk, res.StaleVerses, res.Repaired, res.Failed)
+		log.Printf("%s: done checked=%d partial=%d stale=%d shrunk=%d stale_verses=%d repaired=%d failed=%d",
+			label, res.Checked, res.Partial, res.Stale, res.Shrunk, res.StaleVerses, res.Repaired, res.Failed)
 	}()
 	w.WriteHeader(http.StatusAccepted)
 	w.Write([]byte(`{"status":"started"}`))

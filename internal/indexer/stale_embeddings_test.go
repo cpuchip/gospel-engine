@@ -265,7 +265,18 @@ func TestRepairFindsDrift(t *testing.T) {
 		t.Fatalf("a refused embed changed the stored embeddings: %+v, was %+v", s, before)
 	}
 
-	res, err := idx.RepairEmbeddings(ctx, emb)
+	dry, err := idx.RepairEmbeddings(ctx, emb, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantDry := (EmbedRepairResult{Checked: 3, Partial: 1, Stale: 1, Shrunk: 1, StaleVerses: 1}); *dry != wantDry {
+		t.Errorf("dry run result %+v; want %+v", *dry, wantDry)
+	}
+	if s := readEmbedState(t, ctx, d); s != before {
+		t.Fatalf("a dry run changed the stored embeddings: %+v, was %+v", s, before)
+	}
+
+	res, err := idx.RepairEmbeddings(ctx, emb, false)
 	if err != nil {
 		t.Fatal(err)
 	}

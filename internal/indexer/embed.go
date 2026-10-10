@@ -364,8 +364,8 @@ func rowDrift(want []string, got map[string]string) string {
 // writes from before the reindex cleared changed rows' embeddings. Rows with
 // no embeddings at all are left to the ordinary pass. It reads every row's
 // content and embedded text once, so it is an admin action, not part of each
-// pass.
-func (idx *Indexer) RepairEmbeddings(ctx context.Context, embedder *embed.Client) (*EmbedRepairResult, error) {
+// pass. dry counts what it would repair and changes nothing.
+func (idx *Indexer) RepairEmbeddings(ctx context.Context, embedder *embed.Client, dry bool) (*EmbedRepairResult, error) {
 	res := &EmbedRepairResult{}
 	for _, table := range []string{"talks", "manuals", "books"} {
 		rows, err := idx.DB.Pool.Query(ctx, fmt.Sprintf(`
@@ -405,7 +405,9 @@ func (idx *Indexer) RepairEmbeddings(ctx context.Context, embedder *embed.Client
 			default:
 				continue
 			}
-			todo = append(todo, drifted{id, text})
+			if !dry {
+				todo = append(todo, drifted{id, text})
+			}
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
@@ -447,6 +449,9 @@ func (idx *Indexer) RepairEmbeddings(ctx context.Context, embedder *embed.Client
 		return res, err
 	}
 	res.StaleVerses = len(verses)
+	if dry {
+		return res, nil
+	}
 	for _, v := range verses {
 		ok, err := idx.embedVerse(ctx, embedder, v.id, v.text, true)
 		if err != nil || !ok {
