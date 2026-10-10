@@ -6,7 +6,7 @@ The hosted server runs at **engine.ibeco.me**: a PostgreSQL + pgvector backend w
 
 ## Using it as an MCP server
 
-The same five tools — `gospel_search`, `gospel_get`, `gospel_related`, `gospel_citations`, `gospel_list` — are available two ways:
+The same tools — `gospel_search`, `gospel_get`, `gospel_related`, `gospel_citations`, `gospel_list`, and Strong's `strongs_define`, `strongs_search`, `strongs_for_verse` — are available two ways:
 
 ### 1. Remote HTTP MCP (recommended — no local binary)
 
@@ -33,7 +33,7 @@ For a substrate bridge that resolves `$env:` placeholders, the URL can carry one
 
 ### 2. Local stdio client (`gospel-mcp`)
 
-The `gospel-mcp` binary is a thin stdio bridge that translates MCP JSON-RPC into the server's REST API (`/api/search`, `/api/get`, `/api/related`, `/api/citations`, `/api/list`) using a `Bearer stdy_…` token (`GOSPEL_ENGINE_TOKEN`). It still works and is self-updating; the cross-compiled binaries are served from `/download/gospel-mcp-{os}-{arch}`. Prefer the remote HTTP MCP above unless you specifically need a local process.
+The `gospel-mcp` binary is a thin stdio bridge that translates MCP JSON-RPC into the server's REST API (`/api/search`, `/api/get`, `/api/related`, `/api/citations`, `/api/strongs/*`, `/api/list`) using a `Bearer stdy_…` token (`GOSPEL_ENGINE_TOKEN`). It still works and is self-updating; the cross-compiled binaries are served from `/download/gospel-mcp-{os}-{arch}`. Prefer the remote HTTP MCP above unless you specifically need a local process.
 
 ## Related passages (`gospel_related`)
 
@@ -42,6 +42,17 @@ The `gospel-mcp` binary is a thin stdio bridge that translates MCP JSON-RPC into
 ## Citations (`gospel_citations`)
 
 `/api/citations?reference=Ether 12:27` (a verse or a verse range) answers who has cited it, live, from the [BYU Scripture Citation Index](https://scriptures.byu.edu/). The data is BYU's; every response says so (`source`, `source_url`) and every citation links back to it in the index (`index_url`), and to the talk at churchofjesuschrist.org when the index gives one (`talk_url`). The engine is a light client: one upstream request per uncached lookup, a User-Agent naming the engine and a contact address (`CITATION_CONTACT`), answers kept for a day (at most 5,000), no crawling or pre-fetching, and the per-token rate limit in front.
+
+## Strong's concordance (`strongs_define`, `strongs_search`, `strongs_for_verse`)
+
+`/api/strongs/define?number=G26`, `/api/strongs/search?word=love` and `/api/strongs/verse?reference=John 3:16` serve the
+dual lexicon and the KJV's word-by-word Strong's tagging; `/api/get?reference=...&strongs=true` adds the tagging to Old
+and New Testament verses. The tagging is CrossWire's KJV module (lemma numbers, unpadded), loaded once on the server by
+`scripts/strongs` (see its README); no source data is committed here.
+
+Attribution: Strong's Concordance (James Strong, 1890; public domain) via OpenScriptures (CC BY 4.0 / CC BY-SA). Modern
+glosses: STEPBible TBESH/TBESG, Tyndale House (CC BY 4.0). KJV with Strong's numbers: CrossWire Bible Society's KJV module
+(GPL; OT Strong's from The Bible Foundation; NT from the KJV2003 Project).
 
 ## Rate limits
 
