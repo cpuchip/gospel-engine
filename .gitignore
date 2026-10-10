@@ -33,3 +33,6 @@ go.work.sum
 
 # local-only compose overrides
 docker-compose.override.yml
+
+# Strong's build output (CrossWire / lexicon data): built on the server, never committed
+scripts/strongs/out/

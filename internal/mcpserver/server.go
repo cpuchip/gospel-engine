@@ -138,6 +138,7 @@ func (s *Server) register() {
 				mcp.Enum("scriptures", "talks", "manuals", "books", "study_aids")),
 			mcp.WithNumber("id", mcp.Description("Record id (with type=)")),
 			mcp.WithBoolean("cross_refs", mcp.Description("Include footnote-derived cross-references (opt-in; default false). Ignored for chapter and type+id lookups.")),
+			mcp.WithBoolean("strongs", mcp.Description("Include the KJV's word-by-word Strong's tagging for returned Old/New Testament verses (opt-in; default false).")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			q := url.Values{}
@@ -154,6 +155,9 @@ func (s *Server) register() {
 			}
 			if req.GetBool("cross_refs", false) {
 				q.Set("cross_refs", "true")
+			}
+			if req.GetBool("strongs", false) {
+				q.Set("strongs", "true")
 			}
 			body, err := s.callAPI(ctx, "/api/get?"+q.Encode())
 			if err != nil {
@@ -222,6 +226,69 @@ func (s *Server) register() {
 				return mcp.NewToolResultError("reference is required"), nil
 			}
 			body, err := s.callAPI(ctx, "/api/citations?"+url.Values{"reference": {ref}}.Encode())
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(body), nil
+		},
+	)
+
+	// --- Strong's concordance ------------------------------------------
+	s.mcp.AddTool(
+		mcp.NewTool("strongs_define",
+			mcp.WithDescription("Look up a Strong's number (H7225 Hebrew, G26 Greek): lemma, transliteration, Strong's 1890 definition and KJV usage, derivation, the STEPBible modern gloss and definition, and how many KJV verses carry it."),
+			readOnlyAnnotations(),
+			mcp.WithString("number", mcp.Required(), mcp.Description("A Strong's number: H7225, G26 (leading zeros are fine).")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			n := strings.TrimSpace(req.GetString("number", ""))
+			if n == "" {
+				return mcp.NewToolResultError("number is required (e.g. H7225 or G26)"), nil
+			}
+			body, err := s.callAPI(ctx, "/api/strongs/define?"+url.Values{"number": {n}}.Encode())
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(body), nil
+		},
+	)
+
+	s.mcp.AddTool(
+		mcp.NewTool("strongs_search",
+			mcp.WithDescription("Reverse lookup: Strong's entries for an English word, gloss or transliteration (e.g. \"love\" -> G25, G26, G5368, H157...), best matches first."),
+			readOnlyAnnotations(),
+			mcp.WithString("word", mcp.Required(), mcp.Description("An English word, gloss or transliteration.")),
+			mcp.WithNumber("max_results", mcp.Description("Max results (default 20, cap 100)")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			word := strings.TrimSpace(req.GetString("word", ""))
+			if word == "" {
+				return mcp.NewToolResultError("word is required"), nil
+			}
+			q := url.Values{"word": {word}}
+			if n := req.GetInt("max_results", 0); n > 0 {
+				q.Set("limit", fmt.Sprint(n))
+			}
+			body, err := s.callAPI(ctx, "/api/strongs/search?"+q.Encode())
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(body), nil
+		},
+	)
+
+	s.mcp.AddTool(
+		mcp.NewTool("strongs_for_verse",
+			mcp.WithDescription("A KJV verse or range (\"John 3:16\", \"Genesis 1:1-3\") with its word-by-word Strong's tagging from CrossWire's KJV: each word or phrase with the Hebrew/Greek number(s) behind it, the lemma and a brief gloss. KJV Old and New Testaments only."),
+			readOnlyAnnotations(),
+			mcp.WithString("reference", mcp.Required(), mcp.Description("A KJV verse or range: \"John 3:16\", \"Genesis 1:1-3\".")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			ref := strings.TrimSpace(req.GetString("reference", ""))
+			if ref == "" {
+				return mcp.NewToolResultError("reference is required"), nil
+			}
+			body, err := s.callAPI(ctx, "/api/strongs/verse?"+url.Values{"reference": {ref}}.Encode())
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}

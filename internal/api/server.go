@@ -64,6 +64,9 @@ func (s *Server) Router() http.Handler {
 		g.Get("/api/list", s.handleList)
 		g.Get("/api/related", s.handleRelated)
 		g.Get("/api/citations", s.handleCitations)
+		g.Get("/api/strongs/define", s.handleStrongsDefine)
+		g.Get("/api/strongs/search", s.handleStrongsSearch)
+		g.Get("/api/strongs/verse", s.handleStrongsVerse)
 	})
 
 	// Admin: authenticated AND an admin token. Ordinary tokens get 403 here.
@@ -207,9 +210,10 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	// responses; silently ignored for type=talk/manual/book and chapter-only
 	// scripture lookups.
 	crossRefs := r.URL.Query().Get("cross_refs") == "true"
+	strongs := r.URL.Query().Get("strongs") == "true"
 
 	if ref != "" {
-		s.getByReference(w, r, ref, crossRefs)
+		s.getByReference(w, r, ref, crossRefs, strongs)
 		return
 	}
 	if typ != "" && idStr != "" {
@@ -236,7 +240,7 @@ type verseRow struct {
 	FilePath  string `json:"file_path"`
 }
 
-func (s *Server) getByReference(w http.ResponseWriter, r *http.Request, ref string, crossRefs bool) {
+func (s *Server) getByReference(w http.ResponseWriter, r *http.Request, ref string, crossRefs, strongs bool) {
 	parsed, ok := parseReference(ref)
 	if !ok {
 		http.Error(w, fmt.Sprintf("could not parse reference %q (try '1 Nephi 3:7', 'D&C 93:24-30', or 'Mosiah 4')", ref), http.StatusBadRequest)
@@ -245,16 +249,16 @@ func (s *Server) getByReference(w http.ResponseWriter, r *http.Request, ref stri
 
 	switch {
 	case parsed.Verse > 0 && parsed.EndVerse > 0:
-		s.getVerseRange(w, r, ref, parsed, crossRefs)
+		s.getVerseRange(w, r, ref, parsed, crossRefs, strongs)
 	case parsed.Verse > 0:
-		s.getSingleVerse(w, r, ref, parsed, crossRefs)
+		s.getSingleVerse(w, r, ref, parsed, crossRefs, strongs)
 	default:
 		// Chapter-only refs skip cross_refs (out of scope per Phase 1.5c).
 		s.getChapter(w, r, ref, parsed)
 	}
 }
 
-func (s *Server) getSingleVerse(w http.ResponseWriter, r *http.Request, queryRef string, p parsedRef, crossRefs bool) {
+func (s *Server) getSingleVerse(w http.ResponseWriter, r *http.Request, queryRef string, p parsedRef, crossRefs, strongs bool) {
 	row := s.DB.Pool.QueryRow(r.Context(),
 		`SELECT id, volume, book, chapter, verse, reference, text, file_path
 		 FROM scriptures WHERE book = $1 AND chapter = $2 AND verse = $3 LIMIT 1`,
@@ -277,10 +281,13 @@ func (s *Server) getSingleVerse(w http.ResponseWriter, r *http.Request, queryRef
 		}
 		resp["cross_references"] = xrefs
 	}
+	if strongs && !s.addStrongs(w, r, resp, []verseRow{v}) {
+		return
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) getVerseRange(w http.ResponseWriter, r *http.Request, queryRef string, p parsedRef, crossRefs bool) {
+func (s *Server) getVerseRange(w http.ResponseWriter, r *http.Request, queryRef string, p parsedRef, crossRefs, strongs bool) {
 	if p.EndVerse < p.Verse {
 		http.Error(w, "end verse is before start verse", http.StatusBadRequest)
 		return
@@ -326,6 +333,9 @@ func (s *Server) getVerseRange(w http.ResponseWriter, r *http.Request, queryRef 
 			return
 		}
 		resp["cross_references"] = xrefs
+	}
+	if strongs && !s.addStrongs(w, r, resp, verses) {
+		return
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

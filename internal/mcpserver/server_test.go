@@ -18,7 +18,7 @@ func TestToolsAdvertiseReadOnly(t *testing.T) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	want := []string{"gospel_citations", "gospel_get", "gospel_list", "gospel_related", "gospel_search"}
+	want := []string{"gospel_citations", "gospel_get", "gospel_list", "gospel_related", "gospel_search", "strongs_define", "strongs_for_verse", "strongs_search"}
 	if len(names) != len(want) {
 		t.Fatalf("registered tools = %v, want %v", names, want)
 	}

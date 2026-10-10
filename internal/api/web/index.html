@@ -141,17 +141,21 @@
   <h2>Hosted MCP: nothing to install</h2>
   <p>Clients that dial a remote MCP server over HTTP can use this engine directly, with no binary and no local setup. In claude.ai that is Customize &gt; Connectors &gt; Add custom connector; give it a name and this URL, with your own token in place of <code>stdy_...</code>:</p>
   <pre><code id="mcp-url">https://engine.ibeco.me/mcp?key=stdy_...</code></pre>
-  <p>Tokens come from <a href="https://ibeco.me/settings">ibeco.me settings</a>, the same ones the binary uses. Each token is yours alone and can be revoked there. The key travels in the URL because most remote connectors cannot send headers; a client that can send them may use <code>Authorization: Bearer stdy_...</code> against the same address instead. Same five tools either way: <code>gospel_search</code>, <code>gospel_get</code>, <code>gospel_related</code>, <code>gospel_citations</code> and <code>gospel_list</code>.</p>
+  <p>Tokens come from <a href="https://ibeco.me/settings">ibeco.me settings</a>, the same ones the binary uses. Each token is yours alone and can be revoked there. The key travels in the URL because most remote connectors cannot send headers; a client that can send them may use <code>Authorization: Bearer stdy_...</code> against the same address instead. Same tools either way: <code>gospel_search</code>, <code>gospel_get</code>, <code>gospel_related</code>, <code>gospel_citations</code>, <code>gospel_list</code>, and Strong's: <code>strongs_define</code>, <code>strongs_search</code>, <code>strongs_for_verse</code>.</p>
 
   <h2>API</h2>
-  <p>Five endpoints, bearer-token authenticated:</p>
+  <p>Bearer-token authenticated endpoints:</p>
   <pre><code>GET /api/search?q=faith&amp;mode=hybrid&amp;limit=20
 GET /api/get?ref=1+Nephi+3:7
 GET /api/related?reference=Ether+12:27&amp;hops=2
 GET /api/citations?reference=Ether+12:27
+GET /api/strongs/define?number=G26
+GET /api/strongs/search?word=love
+GET /api/strongs/verse?reference=John+3:16
 GET /api/list?type=scriptures</code></pre>
   <p><code>/api/related</code> returns the passages the library itself links to a passage: its chapter footnotes, the Topical Guide, Bible Dictionary and Guide to the Scriptures entries that list it, and the conference talks and manuals that cite it, one or two links out, each with how it was reached.</p>
   <p><code>/api/citations</code> answers who has cited a verse. Citation lookups are answered live by the <a href="https://scriptures.byu.edu/">BYU Scripture Citation Index</a>, which indexes General Conference, the Journal of Discourses and more. The engine passes your reference to it, shows its results with links back, and keeps a copy for a day so repeated lookups don't load their site. The data is BYU's.</p>
+  <p>The Strong's endpoints, and <code>/api/get?...&amp;strongs=true</code> on Old and New Testament verses, give the KJV's word-by-word Strong's numbers and the lexicon behind them. Strong's Concordance (James Strong, 1890; public domain) via OpenScriptures (CC BY 4.0 / CC BY-SA). Modern glosses: STEPBible TBESH/TBESG, Tyndale House (CC BY 4.0). KJV with Strong's numbers: CrossWire Bible Society's KJV module (GPL; OT Strong's from The Bible Foundation; NT from the KJV2003 Project). A gloss is a starting point for study: read the fuller definition and the verse in context.</p>
   <p>Each personal token has a rate limit, 60 requests a minute unless it was set higher, shared by the API and the hosted MCP. Over it, the server answers <code>429 Too Many Requests</code> with a <code>Retry-After</code> header giving the seconds to wait.</p>
 
   <footer>

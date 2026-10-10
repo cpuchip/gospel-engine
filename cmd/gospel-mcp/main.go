@@ -187,6 +187,7 @@ func (c *client) dispatchTool(name string, args json.RawMessage) (string, error)
 			Type      string `json:"type"`
 			ID        int64  `json:"id"`
 			CrossRefs bool   `json:"cross_refs"`
+			Strongs   bool   `json:"strongs"`
 		}
 		_ = json.Unmarshal(args, &a)
 		q := url.Values{}
@@ -198,6 +199,9 @@ func (c *client) dispatchTool(name string, args json.RawMessage) (string, error)
 		}
 		if a.CrossRefs {
 			q.Set("cross_refs", "true")
+		}
+		if a.Strongs {
+			q.Set("strongs", "true")
 		}
 		return c.callJSON("GET", "/api/get?"+q.Encode(), nil)
 
@@ -235,6 +239,32 @@ func (c *client) dispatchTool(name string, args json.RawMessage) (string, error)
 		}
 		_ = json.Unmarshal(args, &a)
 		return c.callJSON("GET", "/api/citations?"+url.Values{"reference": {a.Reference}}.Encode(), nil)
+
+	case "strongs_define":
+		var a struct {
+			Number string `json:"number"`
+		}
+		_ = json.Unmarshal(args, &a)
+		return c.callJSON("GET", "/api/strongs/define?"+url.Values{"number": {a.Number}}.Encode(), nil)
+
+	case "strongs_search":
+		var a struct {
+			Word       string `json:"word"`
+			MaxResults int    `json:"max_results"`
+		}
+		_ = json.Unmarshal(args, &a)
+		q := url.Values{"word": {a.Word}}
+		if a.MaxResults > 0 {
+			q.Set("limit", fmt.Sprint(a.MaxResults))
+		}
+		return c.callJSON("GET", "/api/strongs/search?"+q.Encode(), nil)
+
+	case "strongs_for_verse":
+		var a struct {
+			Reference string `json:"reference"`
+		}
+		_ = json.Unmarshal(args, &a)
+		return c.callJSON("GET", "/api/strongs/verse?"+url.Values{"reference": {a.Reference}}.Encode(), nil)
 
 	case "gospel_list":
 		var a struct {
@@ -337,6 +367,10 @@ var tools = []map[string]any{
 				},
 				"type": map[string]any{"type": "string", "enum": []string{"scriptures", "talks", "manuals", "books", "study_aids"}},
 				"id":   map[string]any{"type": "integer"},
+				"strongs": map[string]any{
+					"type":        "boolean",
+					"description": "Include the KJV's word-by-word Strong's tagging for returned Old/New Testament verses (opt-in; default false).",
+				},
 				"cross_refs": map[string]any{
 					"type":        "boolean",
 					"description": "Include footnote-derived cross-references for returned verses (opt-in; default false). Ignored for chapter and type+id lookups.",
@@ -369,6 +403,28 @@ var tools = []map[string]any{
 			},
 			"required": []string{"reference"},
 		},
+	},
+	{
+		"name":        "strongs_define",
+		"description": "Look up a Strong's number (H7225 Hebrew, G26 Greek): lemma, transliteration, Strong's 1890 definition and KJV usage, derivation, the STEPBible modern gloss and definition, and how many KJV verses carry it.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"number": map[string]any{"type": "string", "description": "A Strong's number: H7225, G26."},
+		}, "required": []string{"number"}},
+	},
+	{
+		"name":        "strongs_search",
+		"description": "Reverse lookup: Strong's entries for an English word, gloss or transliteration (e.g. \"love\" -> G25, G26, G5368, H157...), best matches first.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"word":        map[string]any{"type": "string", "description": "An English word, gloss or transliteration."},
+			"max_results": map[string]any{"type": "integer", "description": "Max results (default 20, cap 100)"},
+		}, "required": []string{"word"}},
+	},
+	{
+		"name":        "strongs_for_verse",
+		"description": "A KJV verse or range (\"John 3:16\", \"Genesis 1:1-3\") with its word-by-word Strong's tagging from CrossWire's KJV: each word or phrase with the Hebrew/Greek number(s) behind it, the lemma and a brief gloss. KJV Old and New Testaments only.",
+		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
+			"reference": map[string]any{"type": "string", "description": "A KJV verse or range: \"John 3:16\"."},
+		}, "required": []string{"reference"}},
 	},
 	{
 		"name":        "gospel_list",
