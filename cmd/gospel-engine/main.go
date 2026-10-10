@@ -73,6 +73,10 @@ func run() error {
 	// off, but re-probes on a cadence (EMBED_REPROBE_SECONDS) and enables it
 	// automatically once the backend recovers — no restart required.
 	embedder := embed.New(cfg.EmbeddingURL, cfg.EmbeddingModel, cfg.EmbedRequestTimeo)
+	if err := embedder.SetTaskPrefixes(cfg.EmbedTaskPrefixes); err != nil {
+		return err
+	}
+	log.Printf("embedding task prefixes: %q (query %q, document %q)", cfg.EmbedTaskPrefixes, embedder.QueryPrefix, embedder.DocumentPrefix)
 	pingCtx, pingCancel := context.WithTimeout(rootCtx, 5*time.Second)
 	embedOK := embedder.Ping(pingCtx) == nil
 	pingCancel()
