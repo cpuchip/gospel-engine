@@ -97,7 +97,7 @@ func TestEmbedRowIsAtomic(t *testing.T) {
 	if n := count(); n != 3 {
 		t.Fatalf("the ordinary pass should not see the partial row (that is the defect): %d rows", n)
 	}
-	res, err := idx.RepairPartialEmbeddings(ctx, emb)
+	res, err := idx.RepairEmbeddings(ctx, emb)
 	if err != nil {
 		t.Fatal(err)
 	}
