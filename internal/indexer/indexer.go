@@ -11,15 +11,18 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/cpuchip/gospel-engine/internal/db"
+	"github.com/jackc/pgx/v5"
 )
 
 // Indexer parses markdown files from disk and upserts rows into Postgres.
@@ -29,7 +32,8 @@ type Indexer struct {
 	BooksRoot         string // /data/books
 	LogDir            string // append-only diagnostic logs (parse failures); "" disables
 
-	running atomic.Bool // one IndexAll at a time (startup pass, admin reindex)
+	running   atomic.Bool // one IndexAll at a time (startup pass, admin reindex)
+	embedding atomic.Bool // one EmbedAll at a time (startup pass, after an admin reindex)
 }
 
 // ErrIndexRunning is returned by IndexAll while another pass is in progress.
@@ -141,21 +145,23 @@ func (idx *Indexer) indexGospelLibrary(ctx context.Context, r *Result) error {
 			return nil
 		}
 
+		var ierr error
 		switch section {
 		case "scriptures":
-			if err := idx.indexScriptureFile(ctx, path, parts, r); err != nil {
-				r.Errors++
-			}
+			ierr = idx.indexScriptureFile(ctx, path, parts, r)
 		case "general-conference":
-			if err := idx.indexTalkFile(ctx, path, parts, r); err != nil {
-				r.Errors++
-			}
+			ierr = idx.indexTalkFile(ctx, path, parts, r)
 		case "manual":
-			if err := idx.indexManualFile(ctx, path, parts, r); err != nil {
-				r.Errors++
-			}
+			ierr = idx.indexManualFile(ctx, path, parts, r)
 		default:
 			r.Skipped++
+			return nil
+		}
+		// A failed file stays unrecorded so the next pass retries it; recorded,
+		// it would be skipped until its mtime or size changed.
+		if ierr != nil {
+			r.Errors++
+			log.Printf("index %s: %v", rel, ierr)
 			return nil
 		}
 
@@ -263,8 +269,15 @@ func (idx *Indexer) indexScriptureFile(ctx context.Context, path string, parts [
 
 	title := firstHeading(full)
 
-	// Upsert chapter.
-	if _, err := idx.DB.Pool.Exec(ctx, `
+	// One transaction per chapter: a failure leaves the chapter as it was, and
+	// a verse whose text changed loses its embedding in the same commit.
+	tx, err := idx.DB.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO chapters (volume, book, chapter, title, full_content, file_path)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (volume, book, chapter) DO UPDATE
@@ -274,12 +287,38 @@ func (idx *Indexer) indexScriptureFile(ctx context.Context, path string, parts [
 	`, volume, book, chapter, title, full, path); err != nil {
 		return fmt.Errorf("upsert chapter: %w", err)
 	}
-	r.ChaptersIndexed++
+
+	type oldVerse struct {
+		id   int64
+		text string
+	}
+	old := map[int]oldVerse{}
+	rows, err := tx.Query(ctx, `
+		SELECT verse, id, text FROM scriptures
+		WHERE volume = $1 AND book = $2 AND chapter = $3
+		FOR UPDATE`, volume, book, chapter)
+	if err != nil {
+		return fmt.Errorf("read verses: %w", err)
+	}
+	for rows.Next() {
+		var n int
+		var o oldVerse
+		if err := rows.Scan(&n, &o.id, &o.text); err != nil {
+			rows.Close()
+			return err
+		}
+		old[n] = o
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
 
 	verses := parseVerses(full)
+	var changed []int64
 	for _, v := range verses {
 		ref := formatReference(book, chapter, v.Number)
-		if _, err := idx.DB.Pool.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO scriptures (volume, book, chapter, verse, reference, text, file_path)
 			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (volume, book, chapter, verse) DO UPDATE
@@ -289,9 +328,53 @@ func (idx *Indexer) indexScriptureFile(ctx context.Context, path string, parts [
 		`, volume, book, chapter, v.Number, ref, v.Text, path); err != nil {
 			return fmt.Errorf("upsert verse %d: %w", v.Number, err)
 		}
-		r.ScripturesIndexed++
+		if o, ok := old[v.Number]; ok && o.text != v.Text {
+			changed = append(changed, o.id)
+		}
 	}
+	if len(changed) > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM embeddings WHERE source_type = 'scriptures' AND source_id = ANY($1)`, changed); err != nil {
+			return fmt.Errorf("clear changed verse embeddings: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	r.ChaptersIndexed++
+	r.ScripturesIndexed += len(verses)
 	return nil
+}
+
+// upsertText runs upsert, which writes the row of table whose file_path is
+// path, in one transaction, and when that row already existed with paragraphs
+// other than text's (as the embedder splits them), deletes its embeddings in
+// the same transaction. The embed pass treats a row with any embedding as
+// done, so without this an edited source kept its old vectors, and a
+// shortened one kept vectors for paragraphs it no longer has. Comparing
+// paragraphs rather than raw text keeps a change to link targets alone from
+// re-embedding the whole file.
+func (idx *Indexer) upsertText(ctx context.Context, table, path, text, upsert string, args ...any) error {
+	tx, err := idx.DB.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var id int64
+	var old string
+	err = tx.QueryRow(ctx, fmt.Sprintf(`SELECT id, content FROM %s WHERE file_path = $1 FOR UPDATE`, table), path).Scan(&id, &old)
+	existed := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if _, err := tx.Exec(ctx, upsert, args...); err != nil {
+		return err
+	}
+	if existed && !slices.Equal(splitParagraphs(old), splitParagraphs(text)) {
+		if _, err := tx.Exec(ctx, `DELETE FROM embeddings WHERE source_type = $1 AND source_id = $2`, table, id); err != nil {
+			return fmt.Errorf("clear changed embeddings: %w", err)
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // indexStudyAidFile upserts a TG/BD/GS/JST entry into study_aids.
@@ -466,7 +549,7 @@ func (idx *Indexer) indexTalkFile(ctx context.Context, path string, parts []stri
 		idx.logSpeakerFailure(path, full, speaker)
 	}
 
-	if _, err := idx.DB.Pool.Exec(ctx, `
+	if err := idx.upsertText(ctx, "talks", path, content, `
 		INSERT INTO talks (year, month, speaker, title, content, file_path)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (file_path) DO UPDATE
@@ -633,7 +716,7 @@ func (idx *Indexer) indexManualFile(ctx context.Context, path string, parts []st
 		title = strings.TrimSuffix(filepath.Base(path), ".md")
 	}
 
-	if _, err := idx.DB.Pool.Exec(ctx, `
+	if err := idx.upsertText(ctx, "manuals", path, full, `
 		INSERT INTO manuals (content_type, collection_id, title, content, file_path)
 		VALUES ('manual', $1, $2, $3, $4)
 		ON CONFLICT (file_path) DO UPDATE
@@ -686,7 +769,7 @@ func (idx *Indexer) indexBooks(ctx context.Context, r *Result) error {
 			title = section
 		}
 
-		if _, err := idx.DB.Pool.Exec(ctx, `
+		if err := idx.upsertText(ctx, "books", path, full, `
 			INSERT INTO books (collection, section, title, content, file_path)
 			VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (file_path) DO UPDATE
@@ -696,6 +779,7 @@ func (idx *Indexer) indexBooks(ctx context.Context, r *Result) error {
 			    section = EXCLUDED.section
 		`, collection, section, title, full, path); err != nil {
 			r.Errors++
+			log.Printf("index book %s: %v", rel, err)
 			return nil
 		}
 		r.BooksIndexed++

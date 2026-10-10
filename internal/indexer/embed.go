@@ -10,6 +10,7 @@ package indexer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -28,6 +29,9 @@ type EmbedResult struct {
 	Duration   time.Duration
 }
 
+// ErrEmbedRunning is returned by EmbedAll while another pass is in progress.
+var ErrEmbedRunning = errors.New("an embed pass is already running")
+
 // EmbedAll generates and stores embeddings for any scripture verse, talk
 // paragraph, manual paragraph, or book paragraph that doesn't already have
 // one in the `embeddings` table. Safe to re-run.
@@ -35,6 +39,10 @@ func (idx *Indexer) EmbedAll(ctx context.Context, embedder *embed.Client) (*Embe
 	if embedder == nil {
 		return nil, fmt.Errorf("embed: no client configured")
 	}
+	if !idx.embedding.CompareAndSwap(false, true) {
+		return nil, ErrEmbedRunning
+	}
+	defer idx.embedding.Store(false)
 	start := time.Now()
 	r := &EmbedResult{}
 
@@ -114,26 +122,60 @@ func (idx *Indexer) embedVerses(ctx context.Context, embedder *embed.Client) (in
 		if ctx.Err() != nil {
 			return count, ctx.Err()
 		}
-		vec, err := embedder.EmbedDocument(ctx, j.text)
+		ok, err := idx.embedVerse(ctx, embedder, j.id, j.text, false)
 		if err != nil {
 			log.Printf("embed verses: id=%d failed: %v", j.id, err)
 			continue
 		}
-		if _, err := idx.DB.Pool.Exec(ctx, `
-			INSERT INTO embeddings (source_type, source_id, layer, content, embedding, model)
-			VALUES ('scriptures', $1, 'verse', $2, $3, $4)
-			ON CONFLICT (source_type, source_id, layer) DO NOTHING
-		`, j.id, j.text, pgvector.NewVector(vec), embedder.Model); err != nil {
-			log.Printf("embed verses: insert id=%d failed: %v", j.id, err)
-			continue
+		if ok {
+			count++
 		}
-		count++
 		if (i+1)%logEvery == 0 {
 			log.Printf("embed verses: %d / %d", i+1, len(jobs))
 		}
 	}
 	log.Printf("embed verses: done (%d inserted)", count)
 	return count, nil
+}
+
+// embedVerse embeds one verse and writes it only while the verse still has
+// that text: the FOR SHARE waits out a reindex that is changing the verse,
+// then finds the new text and writes nothing, so the old text's vector never
+// lands after the reindex cleared it. The verse is locked before its
+// embedding is touched, the order the reindex uses, so the two cannot
+// deadlock. replace deletes the verse's existing embedding in the same
+// transaction (the repair path). It reports whether a row was written.
+func (idx *Indexer) embedVerse(ctx context.Context, embedder *embed.Client, id int64, text string, replace bool) (bool, error) {
+	vec, err := embedder.EmbedDocument(ctx, text)
+	if err != nil {
+		return false, err
+	}
+	tx, err := idx.DB.Pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	var current string
+	if err := tx.QueryRow(ctx, `SELECT text FROM scriptures WHERE id = $1 FOR SHARE`, id).Scan(&current); err != nil {
+		return false, fmt.Errorf("re-read verse: %w", err)
+	}
+	if current != text {
+		return false, nil
+	}
+	if replace {
+		if _, err := tx.Exec(ctx, `DELETE FROM embeddings WHERE source_type = 'scriptures' AND source_id = $1 AND layer = 'verse'`, id); err != nil {
+			return false, err
+		}
+	}
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO embeddings (source_type, source_id, layer, content, embedding, model)
+		VALUES ('scriptures', $1, 'verse', $2, $3, $4)
+		ON CONFLICT (source_type, source_id, layer) DO NOTHING
+	`, id, text, pgvector.NewVector(vec), embedder.Model)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, tx.Commit(ctx)
 }
 
 // embedTextRows generates per-paragraph embeddings for any table that has
@@ -213,6 +255,10 @@ func paragraphLayer(layer string, p int) string {
 	return fmt.Sprintf("%s_%d", layer, p)
 }
 
+// errRowChanged: the row was rewritten while it was being embedded; the next
+// pass embeds the new text.
+var errRowChanged = errors.New("row changed while it was being embedded")
+
 // embedRow embeds every paragraph of one source row FIRST, then writes them
 // all in one transaction, so a row is either wholly embedded or not at all.
 // Writing paragraph by paragraph, a restart mid-row (a deploy during an index
@@ -235,6 +281,16 @@ func (idx *Indexer) embedRow(ctx context.Context, embedder *embed.Client, tableN
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
+	// The row must still hold the text just embedded. FOR SHARE waits out a
+	// reindex that is rewriting it; that reindex has cleared the row's
+	// embeddings, and writing the old text's vectors now would undo it.
+	var current string
+	if err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT content FROM %s WHERE id = $1 FOR SHARE`, tableName), id).Scan(&current); err != nil {
+		return 0, fmt.Errorf("re-read row: %w", err)
+	}
+	if current != text {
+		return 0, errRowChanged
+	}
 	if replace {
 		if _, err := tx.Exec(ctx, `
 			DELETE FROM embeddings WHERE source_type = $1 AND source_id = $2
@@ -260,24 +316,60 @@ func (idx *Indexer) embedRow(ctx context.Context, embedder *embed.Client, tableN
 	return n, nil
 }
 
-// RepairResult reports RepairPartialEmbeddings.
+// EmbedRepairResult reports RepairEmbeddings. Partial, Stale and Shrunk count
+// talk, manual and book rows; StaleVerses counts verses.
 type EmbedRepairResult struct {
-	Checked  int `json:"checked"`
-	Partial  int `json:"partial"`
-	Repaired int `json:"repaired"`
-	Failed   int `json:"failed"`
+	Checked     int `json:"checked"`
+	Partial     int `json:"partial"`
+	Stale       int `json:"stale"`
+	Shrunk      int `json:"shrunk"`
+	StaleVerses int `json:"stale_verses"`
+	Repaired    int `json:"repaired"`
+	Failed      int `json:"failed"`
 }
 
-// RepairPartialEmbeddings finds talk, manual and book rows whose paragraph
-// embeddings are fewer than their paragraphs (left by the old one-by-one
-// writes) and re-embeds each such row whole, in one transaction per row. Rows
-// with no embeddings at all are left to the ordinary pass. It reads every
-// row's content once, so it is an admin action, not part of each pass.
-func (idx *Indexer) RepairPartialEmbeddings(ctx context.Context, embedder *embed.Client) (*EmbedRepairResult, error) {
+// rowDrift compares a row's stored paragraph embeddings (layer -> text) with
+// the paragraphs the embedder makes of its current text: "shrunk" when a
+// stored layer has no paragraph, "stale" when a stored text differs, "partial"
+// when a paragraph has no layer, "" when they agree.
+func rowDrift(want []string, got map[string]string) string {
+	matched, stale, missing := 0, false, false
+	for p, para := range want {
+		c, ok := got[paragraphLayer("paragraph", p)]
+		switch {
+		case !ok:
+			missing = true
+		case c != para:
+			stale = true
+			matched++
+		default:
+			matched++
+		}
+	}
+	switch {
+	case len(got) > matched:
+		return "shrunk"
+	case stale:
+		return "stale"
+	case missing:
+		return "partial"
+	}
+	return ""
+}
+
+// RepairEmbeddings re-embeds, whole and in one transaction each, every talk,
+// manual and book row whose paragraph embeddings disagree with its current
+// text (partial, stale or shrunk, judged by the embedder's own splitter), and
+// every verse whose embedding was made from other text. These are left by
+// writes from before the reindex cleared changed rows' embeddings. Rows with
+// no embeddings at all are left to the ordinary pass. It reads every row's
+// content and embedded text once, so it is an admin action, not part of each
+// pass. dry counts what it would repair and changes nothing.
+func (idx *Indexer) RepairEmbeddings(ctx context.Context, embedder *embed.Client, dry bool) (*EmbedRepairResult, error) {
 	res := &EmbedRepairResult{}
 	for _, table := range []string{"talks", "manuals", "books"} {
 		rows, err := idx.DB.Pool.Query(ctx, fmt.Sprintf(`
-			SELECT t.id, t.content, count(e.id)
+			SELECT t.id, t.content, array_agg(e.layer), array_agg(e.content)
 			FROM %s t
 			JOIN embeddings e ON e.source_type = $1 AND e.source_id = t.id
 			 AND (e.layer = 'paragraph' OR e.layer LIKE 'paragraph\_%%')
@@ -285,38 +377,89 @@ func (idx *Indexer) RepairPartialEmbeddings(ctx context.Context, embedder *embed
 		if err != nil {
 			return res, fmt.Errorf("scan %s: %w", table, err)
 		}
-		type partial struct {
+		type drifted struct {
 			id   int64
 			text string
 		}
-		var todo []partial
+		var todo []drifted
 		for rows.Next() {
 			var id int64
 			var text string
-			var have int
-			if err := rows.Scan(&id, &text, &have); err != nil {
+			var layers, contents []string
+			if err := rows.Scan(&id, &text, &layers, &contents); err != nil {
 				rows.Close()
 				return res, err
 			}
 			res.Checked++
-			if have < len(splitParagraphs(text)) {
-				todo = append(todo, partial{id, text})
+			got := make(map[string]string, len(layers))
+			for i, l := range layers {
+				got[l] = contents[i]
+			}
+			switch rowDrift(splitParagraphs(text), got) {
+			case "partial":
+				res.Partial++
+			case "stale":
+				res.Stale++
+			case "shrunk":
+				res.Shrunk++
+			default:
+				continue
+			}
+			if !dry {
+				todo = append(todo, drifted{id, text})
 			}
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
 			return res, err
 		}
-		res.Partial += len(todo)
-		for _, p := range todo {
-			if _, err := idx.embedRow(ctx, embedder, table, "paragraph", p.id, p.text, true); err != nil {
+		for _, d := range todo {
+			if _, err := idx.embedRow(ctx, embedder, table, "paragraph", d.id, d.text, true); err != nil {
 				res.Failed++
-				log.Printf("embed repair %s id=%d: %v", table, p.id, err)
+				log.Printf("embed repair %s id=%d: %v", table, d.id, err)
 				continue
 			}
 			res.Repaired++
-			log.Printf("embed repair %s id=%d: re-embedded whole", table, p.id)
+			log.Printf("embed repair %s id=%d: re-embedded whole", table, d.id)
 		}
+	}
+
+	rows, err := idx.DB.Pool.Query(ctx, `
+		SELECT s.id, s.text FROM scriptures s
+		JOIN embeddings e ON e.source_type = 'scriptures' AND e.source_id = s.id AND e.layer = 'verse'
+		WHERE e.content <> s.text`)
+	if err != nil {
+		return res, fmt.Errorf("scan verses: %w", err)
+	}
+	type verse struct {
+		id   int64
+		text string
+	}
+	var verses []verse
+	for rows.Next() {
+		var v verse
+		if err := rows.Scan(&v.id, &v.text); err != nil {
+			rows.Close()
+			return res, err
+		}
+		verses = append(verses, v)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return res, err
+	}
+	res.StaleVerses = len(verses)
+	if dry {
+		return res, nil
+	}
+	for _, v := range verses {
+		ok, err := idx.embedVerse(ctx, embedder, v.id, v.text, true)
+		if err != nil || !ok {
+			res.Failed++
+			log.Printf("embed repair verse id=%d: wrote=%v err=%v", v.id, ok, err)
+			continue
+		}
+		res.Repaired++
 	}
 	return res, nil
 }

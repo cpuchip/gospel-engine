@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -684,6 +685,29 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 		log.Printf("reindex: done scriptures=%d talks=%d manuals=%d study_aids=%d books=%d skipped=%d errors=%d",
 			res.ScripturesIndexed, res.TalksIndexed, res.ManualsIndexed,
 			res.StudyAidsIndexed, res.BooksIndexed, res.Skipped, res.Errors)
+		// A reindex clears the embeddings of every row whose text changed;
+		// embed them now rather than at the next restart.
+		if s.Embed != nil && s.Cfg != nil && s.Cfg.BulkLoadEmbeds {
+			pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			perr := s.Embed.Ping(pingCtx)
+			cancel()
+			if perr != nil {
+				log.Printf("reindex: embed pass skipped: embedding server unavailable: %v", perr)
+				return
+			}
+			eres, err := s.Indexer.EmbedAll(ctx, s.Embed)
+			if errors.Is(err, indexer.ErrEmbedRunning) {
+				log.Printf("reindex: embed pass skipped: one is already running; rows changed after it started wait for the next pass")
+				return
+			}
+			if err != nil {
+				log.Printf("reindex: embed pass error: %v", err)
+			}
+			if eres != nil {
+				log.Printf("reindex: embed pass done verses=%d paragraphs=%d errors=%d (%s)",
+					eres.Verses, eres.Paragraphs, eres.Errors, eres.Duration)
+			}
+		}
 	}()
 	w.WriteHeader(http.StatusAccepted)
 	w.Write([]byte(`{"status":"started"}`))
@@ -761,22 +785,29 @@ func (s *Server) handleRebuildXrefs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
-// handleRepairEmbeddings re-embeds, whole, every talk/manual/book row whose
-// paragraph embeddings are fewer than its paragraphs. Long-running: 202, with
-// progress and the result in the log.
+// handleRepairEmbeddings re-embeds every talk/manual/book row whose paragraph
+// embeddings disagree with its text (partial, stale or shrunk) and every verse
+// embedded from other text. Long-running: 202, with progress and the result in
+// the log. ?dry=true logs the counts and changes nothing.
 func (s *Server) handleRepairEmbeddings(w http.ResponseWriter, r *http.Request) {
 	if s.Indexer == nil || s.Embed == nil {
 		http.Error(w, "indexer or embedder not configured", http.StatusServiceUnavailable)
 		return
 	}
+	dry := r.URL.Query().Get("dry") == "true"
+	label := "embed repair"
+	if dry {
+		label = "embed repair (dry run)"
+	}
 	go func() {
-		log.Printf("embed repair: starting (triggered by API)")
-		res, err := s.Indexer.RepairPartialEmbeddings(context.Background(), s.Embed)
+		log.Printf("%s: starting (triggered by API)", label)
+		res, err := s.Indexer.RepairEmbeddings(context.Background(), s.Embed, dry)
 		if err != nil {
-			log.Printf("embed repair: failed: %v", err)
+			log.Printf("%s: failed: %v", label, err)
 			return
 		}
-		log.Printf("embed repair: done checked=%d partial=%d repaired=%d failed=%d", res.Checked, res.Partial, res.Repaired, res.Failed)
+		log.Printf("%s: done checked=%d partial=%d stale=%d shrunk=%d stale_verses=%d repaired=%d failed=%d",
+			label, res.Checked, res.Partial, res.Stale, res.Shrunk, res.StaleVerses, res.Repaired, res.Failed)
 	}()
 	w.WriteHeader(http.StatusAccepted)
 	w.Write([]byte(`{"status":"started"}`))
