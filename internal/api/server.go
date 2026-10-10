@@ -89,6 +89,7 @@ func (s *Server) Router() http.Handler {
 		g.Post("/api/admin/repair-references", s.handleRepairReferences)
 		g.Post("/api/admin/rebuild-xrefs", s.handleRebuildXrefs)
 		g.Post("/api/admin/rebuild-graph", s.handleRebuildGraph)
+		g.Post("/api/admin/repair-embeddings", s.handleRepairEmbeddings)
 	})
 
 	return r
@@ -758,6 +759,27 @@ func (s *Server) handleRebuildXrefs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+// handleRepairEmbeddings re-embeds, whole, every talk/manual/book row whose
+// paragraph embeddings are fewer than its paragraphs. Long-running: 202, with
+// progress and the result in the log.
+func (s *Server) handleRepairEmbeddings(w http.ResponseWriter, r *http.Request) {
+	if s.Indexer == nil || s.Embed == nil {
+		http.Error(w, "indexer or embedder not configured", http.StatusServiceUnavailable)
+		return
+	}
+	go func() {
+		log.Printf("embed repair: starting (triggered by API)")
+		res, err := s.Indexer.RepairPartialEmbeddings(context.Background(), s.Embed)
+		if err != nil {
+			log.Printf("embed repair: failed: %v", err)
+			return
+		}
+		log.Printf("embed repair: done checked=%d partial=%d repaired=%d failed=%d", res.Checked, res.Partial, res.Repaired, res.Failed)
+	}()
+	w.WriteHeader(http.StatusAccepted)
+	w.Write([]byte(`{"status":"started"}`))
 }
 
 // handleRebuildGraph replaces graph_edges from the rows the index holds

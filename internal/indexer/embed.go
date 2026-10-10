@@ -187,45 +187,138 @@ func (idx *Indexer) embedTextRows(
 		if ctx.Err() != nil {
 			return totalInserted, ctx.Err()
 		}
-		paragraphs := splitParagraphs(j.text)
-		for pIdx, p := range paragraphs {
-			vec, err := embedder.EmbedDocument(ctx, p)
-			if err != nil {
-				if errCount != nil {
-					*errCount++
-				}
-				log.Printf("embed %s: id=%d p=%d failed: %v", tableName, j.id, pIdx, err)
-				continue
+		n, err := idx.embedRow(ctx, embedder, tableName, layer, j.id, j.text, false)
+		if err != nil {
+			if errCount != nil {
+				*errCount++
 			}
-			// Use a synthetic source_id that encodes (id, paragraph_index) so we
-			// can store many paragraphs per source row. Format: id*1000 + pIdx.
-			// Simpler: store the original id and use the (source_type,source_id,layer)
-			// uniqueness only for the FIRST paragraph; subsequent paragraphs use
-			// layer = "paragraph_N". But we declared UNIQUE (source_type, source_id, layer)
-			// — so encode the paragraph index in the layer.
-			synthLayer := layer
-			if pIdx > 0 {
-				synthLayer = fmt.Sprintf("%s_%d", layer, pIdx)
-			}
-			if _, err := idx.DB.Pool.Exec(ctx, `
-				INSERT INTO embeddings (source_type, source_id, layer, content, embedding, model)
-				VALUES ($1, $2, $3, $4, $5, $6)
-				ON CONFLICT (source_type, source_id, layer) DO NOTHING
-			`, tableName, j.id, synthLayer, p, pgvector.NewVector(vec), embedder.Model); err != nil {
-				if errCount != nil {
-					*errCount++
-				}
-				log.Printf("embed %s: insert id=%d p=%d failed: %v", tableName, j.id, pIdx, err)
-				continue
-			}
-			totalInserted++
+			log.Printf("embed %s: id=%d: %v (row left for the next pass)", tableName, j.id, err)
 		}
+		totalInserted += n
 		if (i+1)%50 == 0 {
 			log.Printf("embed %s: %d / %d source rows (%d paragraphs inserted)", tableName, i+1, len(jobs), totalInserted)
 		}
 	}
 	log.Printf("embed %s: done (%d paragraphs inserted across %d rows)", tableName, totalInserted, len(jobs))
 	return totalInserted, nil
+}
+
+// paragraphLayer is the embeddings layer of paragraph p: "paragraph" for the
+// first, "paragraph_N" after (UNIQUE (source_type, source_id, layer) holds one
+// row per paragraph that way).
+func paragraphLayer(layer string, p int) string {
+	if p == 0 {
+		return layer
+	}
+	return fmt.Sprintf("%s_%d", layer, p)
+}
+
+// embedRow embeds every paragraph of one source row FIRST, then writes them
+// all in one transaction, so a row is either wholly embedded or not at all.
+// Writing paragraph by paragraph, a restart mid-row (a deploy during an index
+// pass, 2026-10-09: talk 8565 stopped at 21 of 40) left the row partial, and
+// the next pass skipped it for good because it tests only the first paragraph.
+// replace deletes the row's existing paragraph embeddings inside the same
+// transaction (the repair path); otherwise existing rows are left alone.
+func (idx *Indexer) embedRow(ctx context.Context, embedder *embed.Client, tableName, layer string, id int64, text string, replace bool) (int, error) {
+	paragraphs := splitParagraphs(text)
+	vecs := make([]pgvector.Vector, len(paragraphs))
+	for p, para := range paragraphs {
+		vec, err := embedder.EmbedDocument(ctx, para)
+		if err != nil {
+			return 0, fmt.Errorf("paragraph %d of %d: %w", p, len(paragraphs), err)
+		}
+		vecs[p] = pgvector.NewVector(vec)
+	}
+	tx, err := idx.DB.Pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	if replace {
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM embeddings WHERE source_type = $1 AND source_id = $2
+			  AND (layer = $3 OR layer LIKE $3 || '\_%')`, tableName, id, layer); err != nil {
+			return 0, fmt.Errorf("clear partial row: %w", err)
+		}
+	}
+	n := 0
+	for p, para := range paragraphs {
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO embeddings (source_type, source_id, layer, content, embedding, model)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (source_type, source_id, layer) DO NOTHING
+		`, tableName, id, paragraphLayer(layer, p), para, vecs[p], embedder.Model)
+		if err != nil {
+			return 0, fmt.Errorf("insert paragraph %d: %w", p, err)
+		}
+		n += int(tag.RowsAffected())
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// RepairResult reports RepairPartialEmbeddings.
+type EmbedRepairResult struct {
+	Checked  int `json:"checked"`
+	Partial  int `json:"partial"`
+	Repaired int `json:"repaired"`
+	Failed   int `json:"failed"`
+}
+
+// RepairPartialEmbeddings finds talk, manual and book rows whose paragraph
+// embeddings are fewer than their paragraphs (left by the old one-by-one
+// writes) and re-embeds each such row whole, in one transaction per row. Rows
+// with no embeddings at all are left to the ordinary pass. It reads every
+// row's content once, so it is an admin action, not part of each pass.
+func (idx *Indexer) RepairPartialEmbeddings(ctx context.Context, embedder *embed.Client) (*EmbedRepairResult, error) {
+	res := &EmbedRepairResult{}
+	for _, table := range []string{"talks", "manuals", "books"} {
+		rows, err := idx.DB.Pool.Query(ctx, fmt.Sprintf(`
+			SELECT t.id, t.content, count(e.id)
+			FROM %s t
+			JOIN embeddings e ON e.source_type = $1 AND e.source_id = t.id
+			 AND (e.layer = 'paragraph' OR e.layer LIKE 'paragraph\_%%')
+			GROUP BY t.id, t.content`, table), table)
+		if err != nil {
+			return res, fmt.Errorf("scan %s: %w", table, err)
+		}
+		type partial struct {
+			id   int64
+			text string
+		}
+		var todo []partial
+		for rows.Next() {
+			var id int64
+			var text string
+			var have int
+			if err := rows.Scan(&id, &text, &have); err != nil {
+				rows.Close()
+				return res, err
+			}
+			res.Checked++
+			if have < len(splitParagraphs(text)) {
+				todo = append(todo, partial{id, text})
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return res, err
+		}
+		res.Partial += len(todo)
+		for _, p := range todo {
+			if _, err := idx.embedRow(ctx, embedder, table, "paragraph", p.id, p.text, true); err != nil {
+				res.Failed++
+				log.Printf("embed repair %s id=%d: %v", table, p.id, err)
+				continue
+			}
+			res.Repaired++
+			log.Printf("embed repair %s id=%d: re-embedded whole", table, p.id)
+		}
+	}
+	return res, nil
 }
 
 // splitParagraphs splits text on blank lines, trims, drops empties, and caps
