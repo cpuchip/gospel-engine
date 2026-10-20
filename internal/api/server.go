@@ -167,6 +167,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mode := search.Mode(strings.ToLower(r.URL.Query().Get("mode")))
+	if mode == "" {
+		mode = search.ModeHybrid // what Search runs when none is asked; echoed below
+	}
 	limitStr := r.URL.Query().Get("limit")
 	limit, _ := strconv.Atoi(limitStr)
 
@@ -468,7 +471,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	case "talks":
 		rows, err := s.DB.Pool.Query(r.Context(), `
 			SELECT year, month, COUNT(*) AS talks
-			FROM talks GROUP BY year, month ORDER BY year DESC, month DESC LIMIT 50`)
+			FROM talks GROUP BY year, month ORDER BY year DESC, month DESC`)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return

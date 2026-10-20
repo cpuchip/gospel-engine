@@ -88,7 +88,7 @@ func (s *Server) register() {
 	// --- gospel_search -------------------------------------------------
 	s.mcp.AddTool(
 		mcp.NewTool("gospel_search",
-			mcp.WithDescription("Search scriptures, conference talks, manuals, books, and study aids (Topical Guide, Bible Dictionary, Guide to the Scriptures, JST excerpts). Modes: keyword (FTS), semantic (vector), hybrid (RRF merge — default)."),
+			mcp.WithDescription("Search scriptures, conference talks, manuals, books, and study aids (Topical Guide, Bible Dictionary, Guide to the Scriptures, JST excerpts). Modes: keyword (full-text search), semantic (vector similarity), hybrid (the two merged by reciprocal rank fusion; the default). Scores are not comparable across modes: keyword is Postgres ts_rank (roughly 0 to 1), semantic is cosine similarity (about 0.6 to 0.9 on this corpus), hybrid is a rank-fusion sum (1/(60+rank) per list, so about 0.016 to 0.033). The response's mode field is the mode that ran."),
 			readOnlyAnnotations(),
 			mcp.WithString("query", mcp.Required(), mcp.Description("Natural-language search query")),
 			mcp.WithString("mode", mcp.Description("Search mode: keyword | semantic | hybrid (default: hybrid)"),
@@ -170,7 +170,7 @@ func (s *Server) register() {
 	// --- gospel_related -------------------------------------------------
 	s.mcp.AddTool(
 		mcp.NewTool("gospel_related",
-			mcp.WithDescription("Passages the library itself links to a passage, one or two hops out: chapter footnotes, Topical Guide / Bible Dictionary / Guide to the Scriptures entries, and the scripture citations in conference talks and manuals. Seed with a scripture `reference` (verse, range, or chapter) or with `type` (talks, manuals, study_aids) + `id`. Each result says how it was reached (via.edge, via.direction: out = the seed's own link, in = a link pointing at the seed; via.through names the passage in between on a two-hop result). Ranked by hops, then by how many links reach it."),
+			mcp.WithDescription("Passages the library itself links to a passage, one or two hops out: chapter footnotes, Topical Guide / Bible Dictionary / Guide to the Scriptures entries, and the scripture citations in conference talks and manuals. Seed with a scripture `reference` (verse, range, or chapter) or with `type` (talks, manuals, study_aids) + `id`. Each result says how it was reached (via.edge, via.direction: out = the seed's own link, in = a link pointing at the seed; via.through names the passage in between on a two-hop result). Ranked by hops, then by how many links reach it. The list fills with the nearest hop first, so on a well-cited verse the default limit of 30 can hold nothing but one-hop manual citations; raise limit (cap 200) to reach talks and two-hop results."),
 			readOnlyAnnotations(),
 			mcp.WithString("reference", mcp.Description("Scripture reference: \"Ether 12:27\", \"D&C 93:24-30\", \"Mosiah 4\".")),
 			mcp.WithString("type", mcp.Description("Record type for id seeds"), mcp.Enum("talks", "manuals", "study_aids")),
@@ -213,7 +213,7 @@ func (s *Server) register() {
 	// --- gospel_citations ----------------------------------------------
 	s.mcp.AddTool(
 		mcp.NewTool("gospel_citations",
-			mcp.WithDescription("Who has cited a verse: General Conference talks, Journal of Discourses and other sources, answered live by the BYU Scripture Citation Index (scriptures.byu.edu) and kept for a day. Each citation has the index's locator (e.g. \"1989-O:54\"), speaker, title, a link to it in the index, and for conference talks a link to the talk at churchofjesuschrist.org. The data is BYU's."),
+			mcp.WithDescription("Who has cited a verse: General Conference talks, Journal of Discourses and other sources, answered live by the BYU Scripture Citation Index (scriptures.byu.edu) and kept for a day. Each citation has the index's locator (reference), speaker, title, a link to it in the index (index_url), and where the index carries one a link to the talk at churchofjesuschrist.org (talk_url; many rows have only index_url). The locator is the index's own: conference talks are year, A or O for the April or October conference, and a number the index assigns (\"1989-O:54\"; recent conferences show 0); Journal of Discourses entries are volume:page (\"JD 19:81b\"). count is the number of citation rows, one per place a talk cites the verse, so a talk citing it three times appears three times. The data is BYU's."),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
@@ -255,7 +255,7 @@ func (s *Server) register() {
 
 	s.mcp.AddTool(
 		mcp.NewTool("strongs_search",
-			mcp.WithDescription("Reverse lookup: Strong's entries for an English word, gloss or transliteration (e.g. \"love\" -> G25, G26, G5368, H157...), best matches first."),
+			mcp.WithDescription("Reverse lookup: Strong's entries for an English word, gloss or transliteration (e.g. \"love\" -> G25, G26, G5368, H157...), best matches first. It matches English text, not concepts: an exact gloss or transliteration scores 100, the word in the KJV definition 60, the word inside the gloss 40, the word in Strong's definition 20. An entry whose gloss uses a different English word does not appear (H2603 chanan is under \"gracious\", not \"grace\"); search the related word too."),
 			readOnlyAnnotations(),
 			mcp.WithString("word", mcp.Required(), mcp.Description("An English word, gloss or transliteration.")),
 			mcp.WithNumber("max_results", mcp.Description("Max results (default 20, cap 100)")),
@@ -299,7 +299,7 @@ func (s *Server) register() {
 	// --- gospel_list ---------------------------------------------------
 	s.mcp.AddTool(
 		mcp.NewTool("gospel_list",
-			mcp.WithDescription("List available content. type=scriptures returns volume summaries; type=talks lists conference sessions; type=manuals lists collections; type=books lists collections; type=study_aids returns per-aid-type counts (tg/bd/gs/jst); omit type for overall stats."),
+			mcp.WithDescription("List available content. type=scriptures returns volume summaries; type=talks lists every conference session with its talk count, newest first; type=manuals lists collections; type=books lists collections; type=study_aids returns per-aid-type counts (tg/bd/gs/jst); omit type for overall stats."),
 			readOnlyAnnotations(),
 			mcp.WithString("type", mcp.Description("Content type to list (omit for overall stats)"),
 				mcp.Enum("scriptures", "talks", "manuals", "books", "study_aids")),
