@@ -128,7 +128,8 @@ func (s *Server) register() {
 				"`reference` accepts:\n"+
 				"  • single verse — \"1 Nephi 3:7\", \"Matt 5:14\"\n"+
 				"  • verse range  — \"D&C 93:24-30\" (capped at 50 verses)\n"+
-				"  • whole chapter — \"Mosiah 4\" (returns chapters row with full_content)\n\n"+
+				"  • whole chapter — \"Mosiah 4\" (returns chapters row with full_content)\n"+
+				"Book names may be full, the Church's abbreviations (1 Ne., Hel., Moro., JS-H, A of F), common short forms (Eth, Mt, Jn), or spoken ordinals (First Nephi); an unknown name is a 400, never a guess.\n\n"+
 				"Set `cross_refs: true` on a single-verse or verse-range query to also "+
 				"receive footnote-derived cross-references. Off by default.\n\n"+
 				"For talks/manuals/books/study_aids, omit `reference` and pass `type` + `id`."),
