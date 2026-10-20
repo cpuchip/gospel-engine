@@ -157,6 +157,10 @@ type Options struct {
 	Mode    Mode
 	Sources []Source
 	Limit   int
+	// Speaker narrows the search to talks whose speaker contains this text
+	// (case-insensitive; "Bednar" matches "Elder David A. Bednar"). Only talks
+	// have a speaker, so a speaker implies Sources = talks.
+	Speaker string
 }
 
 // Search runs the requested search, then decorates each result's source links
@@ -219,6 +223,10 @@ func (s *Searcher) searchRaw(ctx context.Context, opt Options) ([]Result, error)
 	}
 	if opt.Mode == "" {
 		opt.Mode = ModeHybrid
+	}
+	opt.Speaker = strings.TrimSpace(opt.Speaker)
+	if opt.Speaker != "" {
+		opt.Sources = []Source{SourceTalks}
 	}
 	if len(opt.Sources) == 0 {
 		opt.Sources = allSources
@@ -288,9 +296,10 @@ func (s *Searcher) keyword(ctx context.Context, opt Options) ([]Result, error) {
 			       ts_rank(tsv, plainto_tsquery('english', $1)) AS rank
 			FROM talks
 			WHERE tsv @@ plainto_tsquery('english', $1)
+			  AND ($3 = '' OR speaker ILIKE '%' || $3 || '%')
 			ORDER BY rank DESC
 			LIMIT $2
-		`, opt.Query, opt.Limit)
+		`, opt.Query, opt.Limit, opt.Speaker)
 		if err != nil {
 			return nil, fmt.Errorf("talks fts: %w", err)
 		}
@@ -497,15 +506,40 @@ func (s *Searcher) nearest(ctx context.Context, vec pgvector.Vector, opt Options
 		return collect(rows)
 	}
 
-	types := make([]string, 0, len(opt.Sources))
-	for _, src := range opt.Sources {
-		types = append(types, string(src))
-	}
 	tx, err := s.DB.Pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return nil, fmt.Errorf("embedding ANN tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	if opt.Speaker != "" {
+		// One speaker's paragraphs are a sliver of the table (a few thousand
+		// of 384k), too selective for the iterative index scan to find within
+		// its tuple budget. The exact answer is cheap at that size: with index
+		// scans off the planner reads the speaker's rows through the
+		// (source_type, source_id) bitmap and sorts them by distance.
+		if _, err := tx.Exec(ctx, `SET LOCAL enable_indexscan = off`); err != nil {
+			return nil, fmt.Errorf("embedding speaker scan: %w", err)
+		}
+		rows, err := tx.Query(ctx, `
+			SELECT e.source_type, e.source_id, e.content,
+			       1 - (e.embedding <=> $1) AS similarity
+			FROM embeddings e
+			JOIN talks t ON t.id = e.source_id
+			WHERE e.source_type = 'talks' AND t.speaker ILIKE '%' || $3 || '%'
+			ORDER BY e.embedding <=> $1
+			LIMIT $2
+		`, vec, opt.Limit, opt.Speaker)
+		if err != nil {
+			return nil, fmt.Errorf("embedding ANN query (speaker): %w", err)
+		}
+		return collect(rows)
+	}
+
+	types := make([]string, 0, len(opt.Sources))
+	for _, src := range opt.Sources {
+		types = append(types, string(src))
+	}
 	if _, err := tx.Exec(ctx, `SET LOCAL hnsw.iterative_scan = relaxed_order`); err != nil {
 		return nil, fmt.Errorf("embedding ANN iterative scan: %w", err)
 	}

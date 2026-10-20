@@ -186,6 +186,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	results, err := s.Searcher.Search(ctx, search.Options{
 		Query: q, Mode: mode, Sources: sources, Limit: limit,
+		Speaker: r.URL.Query().Get("speaker"),
 	})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("search failed: %v", err), http.StatusInternalServerError)
