@@ -12,6 +12,7 @@ import (
 
 	"github.com/cpuchip/gospel-engine/internal/db"
 	"github.com/cpuchip/gospel-engine/internal/embed"
+	"github.com/jackc/pgx/v5"
 	"github.com/pgvector/pgvector-go"
 )
 
@@ -34,6 +35,9 @@ const (
 	SourceBooks      Source = "books"
 	SourceStudyAids  Source = "study_aids"
 )
+
+// allSources is every source a caller may ask for; an empty Sources means all.
+var allSources = []Source{SourceScriptures, SourceTalks, SourceManuals, SourceBooks, SourceStudyAids}
 
 // Result is a single search hit.
 type Result struct {
@@ -217,7 +221,7 @@ func (s *Searcher) searchRaw(ctx context.Context, opt Options) ([]Result, error)
 		opt.Mode = ModeHybrid
 	}
 	if len(opt.Sources) == 0 {
-		opt.Sources = []Source{SourceScriptures, SourceTalks, SourceManuals, SourceBooks, SourceStudyAids}
+		opt.Sources = allSources
 	}
 
 	switch opt.Mode {
@@ -398,50 +402,18 @@ func (s *Searcher) keyword(ctx context.Context, opt Options) ([]Result, error) {
 	return all, nil
 }
 
-// semantic runs a single nearest-neighbor query against the embeddings table,
-// then enriches each row with metadata from the appropriate source table. The
+// semantic runs a nearest-neighbor query against the embeddings table, then
+// enriches each row with metadata from the appropriate source table. The
 // caller passes the embeddings client resolved by semanticClient (never nil).
 func (s *Searcher) semantic(ctx context.Context, client *embed.Client, opt Options) ([]Result, error) {
 	vec, err := client.EmbedQuery(ctx, opt.Query)
 	if err != nil {
 		return nil, fmt.Errorf("embedding query: %w", err)
 	}
-	wantSet := sourceSet(opt.Sources)
-
-	// Fetch a few extra rows so per-source filtering doesn't starve us.
-	fetch := opt.Limit * 4
-	rows, err := s.DB.Pool.Query(ctx, `
-		SELECT source_type, source_id, content,
-		       1 - (embedding <=> $1) AS similarity
-		FROM embeddings
-		ORDER BY embedding <=> $1
-		LIMIT $2
-	`, pgvector.NewVector(vec), fetch)
+	hits, err := s.nearest(ctx, pgvector.NewVector(vec), opt)
 	if err != nil {
-		return nil, fmt.Errorf("embedding ANN query: %w", err)
+		return nil, err
 	}
-	type ann struct {
-		typ        string
-		id         int64
-		text       string
-		similarity float64
-	}
-	var hits []ann
-	for rows.Next() {
-		var a ann
-		if err := rows.Scan(&a.typ, &a.id, &a.text, &a.similarity); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		if !wantSet[Source(a.typ)] {
-			continue
-		}
-		hits = append(hits, a)
-		if len(hits) >= opt.Limit {
-			break
-		}
-	}
-	rows.Close()
 
 	// Enrich.
 	out := make([]Result, 0, len(hits))
@@ -454,6 +426,101 @@ func (s *Searcher) semantic(ctx context.Context, client *embed.Client, opt Optio
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// ann is one embeddings row returned by the nearest-neighbor query.
+type ann struct {
+	typ        string
+	id         int64
+	text       string
+	similarity float64
+}
+
+// nearest returns up to opt.Limit embeddings rows closest to vec, restricted to
+// opt.Sources.
+//
+// With every source requested, one ANN pass over the table is right. It is
+// overfetched and filtered in Go against any source_type the API does not
+// serve; nothing the current indexer writes needs that, and the path is kept as
+// it was.
+//
+// With a subset, the filter has to reach the index. The executor applies WHERE
+// to the rows the HNSW scan hands back (its candidate list, ef_search rows),
+// and the corpus is lopsided: a verse scores well below a talk or manual chunk
+// on the same query, so that list holds no verse at all and a plain filter
+// returns nothing (semantic search over scriptures gave 0 to 1 rows at any
+// limit). hnsw.iterative_scan makes the index keep scanning until the LIMIT is
+// met or hnsw.max_scan_tuples is reached; relaxed_order returned the same rows
+// as an exact scan on the live corpus. The setting is per transaction, hence
+// the read-only tx.
+func (s *Searcher) nearest(ctx context.Context, vec pgvector.Vector, opt Options) ([]ann, error) {
+	wantSet := sourceSet(opt.Sources)
+
+	collect := func(rows pgx.Rows) ([]ann, error) {
+		var hits []ann
+		for rows.Next() {
+			var a ann
+			if err := rows.Scan(&a.typ, &a.id, &a.text, &a.similarity); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if !wantSet[Source(a.typ)] {
+				continue
+			}
+			hits = append(hits, a)
+			if len(hits) >= opt.Limit {
+				break
+			}
+		}
+		rows.Close()
+		return hits, rows.Err()
+	}
+
+	all := true
+	for _, src := range allSources {
+		if !wantSet[src] {
+			all = false
+			break
+		}
+	}
+	if all {
+		rows, err := s.DB.Pool.Query(ctx, `
+			SELECT source_type, source_id, content,
+			       1 - (embedding <=> $1) AS similarity
+			FROM embeddings
+			ORDER BY embedding <=> $1
+			LIMIT $2
+		`, vec, opt.Limit*4)
+		if err != nil {
+			return nil, fmt.Errorf("embedding ANN query: %w", err)
+		}
+		return collect(rows)
+	}
+
+	types := make([]string, 0, len(opt.Sources))
+	for _, src := range opt.Sources {
+		types = append(types, string(src))
+	}
+	tx, err := s.DB.Pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("embedding ANN tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SET LOCAL hnsw.iterative_scan = relaxed_order`); err != nil {
+		return nil, fmt.Errorf("embedding ANN iterative scan: %w", err)
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT source_type, source_id, content,
+		       1 - (embedding <=> $1) AS similarity
+		FROM embeddings
+		WHERE source_type = ANY($3)
+		ORDER BY embedding <=> $1
+		LIMIT $2
+	`, vec, opt.Limit, types)
+	if err != nil {
+		return nil, fmt.Errorf("embedding ANN query (filtered): %w", err)
+	}
+	return collect(rows)
 }
 
 // enrich fills in title/reference/file_path from the source table.
