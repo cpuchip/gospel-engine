@@ -213,19 +213,24 @@ func (s *Server) register() {
 	// --- gospel_citations ----------------------------------------------
 	s.mcp.AddTool(
 		mcp.NewTool("gospel_citations",
-			mcp.WithDescription("Who has cited a verse: General Conference talks, Journal of Discourses and other sources, answered live by the BYU Scripture Citation Index (scriptures.byu.edu) and kept for a day. Each citation has the index's locator (reference), speaker, title, a link to it in the index (index_url), and where the index carries one a link to the talk at churchofjesuschrist.org (talk_url; many rows have only index_url). The locator is the index's own: conference talks are year, A or O for the April or October conference, and a number the index assigns (\"1989-O:54\"; recent conferences show 0); Journal of Discourses entries are volume:page (\"JD 19:81b\"). count is the number of citation rows, one per place a talk cites the verse, so a talk citing it three times appears three times. The data is BYU's."),
+			mcp.WithDescription("Who has cited a verse: General Conference talks, Journal of Discourses and other sources, answered live by the BYU Scripture Citation Index (scriptures.byu.edu) and kept for a day. Each citation has the index's locator (reference), speaker, title, a link to it in the index (index_url), and where the index carries one a link to the talk at churchofjesuschrist.org (talk_url; many rows have only index_url). The locator is the index's own: conference talks are year, A or O for the April or October conference, and a number the index assigns (\"1989-O:54\"; recent conferences show 0); Journal of Discourses entries are volume:page (\"JD 19:81b\"). count is the number of citation rows, one per place a talk cites the verse, so a talk citing it three times appears three times; unique_sources is the number of distinct citing talks. limit trims the rows returned (newest conference first, as the index orders them) without changing either count. The data is BYU's."),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
 			mcp.WithOpenWorldHintAnnotation(true), // it asks BYU's site
 			mcp.WithString("reference", mcp.Required(), mcp.Description("A verse or verse range: \"Ether 12:27\", \"D&C 93:24-30\".")),
+			mcp.WithNumber("limit", mcp.Description("Return only the first N citation rows (default all)")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			ref := strings.TrimSpace(req.GetString("reference", ""))
 			if ref == "" {
 				return mcp.NewToolResultError("reference is required"), nil
 			}
-			body, err := s.callAPI(ctx, "/api/citations?"+url.Values{"reference": {ref}}.Encode())
+			q := url.Values{"reference": {ref}}
+			if limit := req.GetInt("limit", 0); limit > 0 {
+				q.Set("limit", fmt.Sprint(limit))
+			}
+			body, err := s.callAPI(ctx, "/api/citations?"+q.Encode())
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}

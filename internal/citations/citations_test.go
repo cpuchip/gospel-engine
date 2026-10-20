@@ -23,7 +23,10 @@ const sample = `<div class="versenum">27<!--comment
                     --><div class="reference referencewatch referencelisten">2026-A:0, Test Speaker One</div><div class="talktitle talktitlewatch talktitlelisten">Weak Things &amp; Strong</div></a><a href="javascript:void(0);" onclick="watchTalk('8851', 'https://www.churchofjesuschrist.org/study/general-conference/2026/04/99test?lang=eng');" class="watchlink"><div class="watchtalk">Watch</div></a><!--comment
                 --></li><!--comment
                 --><li><a href="javascript:void(0);" class="refcounter" onclick="getTalk('42', '7');"><!--comment
-                    --><div class="reference">JD 19:81b, Test Speaker Two</div><div class="talktitle">A Discourse</div></a></li>
+                    --><div class="reference">JD 19:81b, Test Speaker Two</div><div class="talktitle">A Discourse</div></a></li><!--comment
+                --><li><a href="javascript:void(0);" class="refcounter" onclick="getTalk('8851', '145819');"><!--comment
+                    --><div class="reference referencewatch referencelisten">2026-A:0, Test Speaker One</div><div class="talktitle talktitlewatch talktitlelisten">Weak Things &amp; Strong</div></a><a href="javascript:void(0);" onclick="watchTalk('8851', 'https://www.churchofjesuschrist.org/study/general-conference/2026/04/99test?lang=eng');" class="watchlink"><div class="watchtalk">Watch</div></a><!--comment
+                --></li>
         </ul>`
 
 func TestParse(t *testing.T) {
@@ -32,11 +35,14 @@ func TestParse(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Citation{
-		{Reference: "2026-A:0", Speaker: "Test Speaker One", Title: "Weak Things & Strong",
+		{TalkID: "8851", Reference: "2026-A:0", Speaker: "Test Speaker One", Title: "Weak Things & Strong",
 			IndexURL: "https://scriptures.byu.edu/#:t2293$145818:",
 			TalkURL:  "https://www.churchofjesuschrist.org/study/general-conference/2026/04/99test?lang=eng"},
-		{Reference: "JD 19:81b", Speaker: "Test Speaker Two", Title: "A Discourse",
+		{TalkID: "42", Reference: "JD 19:81b", Speaker: "Test Speaker Two", Title: "A Discourse",
 			IndexURL: "https://scriptures.byu.edu/#:t2a$7:"},
+		{TalkID: "8851", Reference: "2026-A:0", Speaker: "Test Speaker One", Title: "Weak Things & Strong",
+			IndexURL: "https://scriptures.byu.edu/#:t2293$145819:",
+			TalkURL:  "https://www.churchofjesuschrist.org/study/general-conference/2026/04/99test?lang=eng"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("parsed %d citations, want %d: %+v", len(got), len(want), got)
@@ -45,6 +51,21 @@ func TestParse(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("citation %d:\n got  %+v\n want %+v", i, got[i], want[i])
 		}
+	}
+}
+
+// The index logs every place a talk cites the verse, so one talk can be
+// several rows. count is rows; unique_sources is distinct citing items.
+func TestUniqueSources(t *testing.T) {
+	got, err := Parse(sample, "https://scriptures.byu.edu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := uniqueSources(got); n != 2 {
+		t.Errorf("uniqueSources = %d over %d rows, want 2", n, len(got))
+	}
+	if uniqueSources(nil) != 0 {
+		t.Error("uniqueSources(nil) != 0")
 	}
 }
 
@@ -78,7 +99,7 @@ func TestLookupCachesForADay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r1.Cached || r1.Count != 2 || r1.Source != Source || r1.Reference != "Ether 12:27" {
+	if r1.Cached || r1.Count != 3 || r1.Unique != 2 || r1.Source != Source || r1.Reference != "Ether 12:27" {
 		t.Errorf("first lookup: %+v", r1)
 	}
 	if want := "/citation_index/citation_ajax/Any/1830/2027/all/s/f/218/12?verses=27"; gotPath != want {
