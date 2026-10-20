@@ -87,7 +87,11 @@ func TestStrongsAgainstPostgres(t *testing.T) {
 		('G25','greek','ἀγαπάω','agapáō','to love (in a social or moral sense)','(be-)love(-ed)','to love'),
 		('G26','greek','ἀγάπη','agápē','love, i.e. affection or benevolence','(feast of) charity, love','love'),
 		('G2316','greek','θεός','theós','a deity','God, god','God'),
-		('G3588','greek','ὁ','ho','the definite article','the','the')`)
+		('G3588','greek','ὁ','ho','the definite article','the','the'),
+		('G5485','greek','χάρις','cháris','graciousness','grace(-ious), favour','grace'),
+		('G5483','greek','χαρίζομαι','charízomai','to grant as a favor','forgive, give','to give grace'),
+		('G3681','greek','ὄνειδος','óneidos','notoriety, i.e. a taunt','reproach','disgrace'),
+		('G6172','greek','','','','','disgracefully')`)
 	exec(`INSERT INTO kjv_words (volume, book, chapter, verse, position, word, numbers) VALUES
 		('nt','john',3,16,0,'For','{}'),
 		('nt','john',3,16,1,'God','{G3588,G2316}'),
@@ -115,6 +119,22 @@ func TestStrongsAgainstPostgres(t *testing.T) {
 	}
 	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &srch) != nil || len(srch.Results) < 2 || srch.Results[0].Number != "G26" {
 		t.Errorf("search love: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// A word matches whole words in the gloss, so "grace" keeps "to give
+	// grace" and drops "disgrace"; an extended entry without a lemma never
+	// appears.
+	rec = get("/api/strongs/search?word=grace")
+	srch.Results = nil
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &srch) != nil {
+		t.Fatalf("search grace: %d %s", rec.Code, rec.Body.String())
+	}
+	var got []string
+	for _, r := range srch.Results {
+		got = append(got, r.Number)
+	}
+	if strings.Join(got, ",") != "G5485,G5483" {
+		t.Errorf("search grace: %v, want [G5485 G5483] (no disgrace, no lemma-less entry)", got)
 	}
 
 	rec = get("/api/strongs/verse?reference=" + url.QueryEscape("John 3:16"))
