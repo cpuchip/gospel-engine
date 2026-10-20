@@ -89,6 +89,7 @@ func run() error {
 	// --- Indexer (always constructed; backgrounded only when configured) ---
 	idx := indexer.New(database, cfg.GospelLibraryPath, cfg.BooksPath)
 	idx.LogDir = cfg.LogDir
+	idx.BooksCollections = cfg.BooksCollections
 
 	if cfg.IndexOnStartup {
 		go func() {

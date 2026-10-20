@@ -28,9 +28,10 @@ import (
 // Indexer parses markdown files from disk and upserts rows into Postgres.
 type Indexer struct {
 	DB                *db.DB
-	GospelLibraryRoot string // /data/gospel-library
-	BooksRoot         string // /data/books
-	LogDir            string // append-only diagnostic logs (parse failures); "" disables
+	GospelLibraryRoot string   // /data/gospel-library
+	BooksRoot         string   // /data/books
+	BooksCollections  []string // top-level folders of BooksRoot to index; empty means every folder
+	LogDir            string   // append-only diagnostic logs (parse failures); "" disables
 
 	running   atomic.Bool // one IndexAll at a time (startup pass, admin reindex)
 	embedding atomic.Bool // one EmbedAll at a time (startup pass, after an admin reindex)
@@ -45,6 +46,20 @@ func (idx *Indexer) Busy() bool { return idx.running.Load() }
 // New builds an Indexer.
 func New(database *db.DB, gospelRoot, booksRoot string) *Indexer {
 	return &Indexer{DB: database, GospelLibraryRoot: gospelRoot, BooksRoot: booksRoot}
+}
+
+// bookCollectionAllowed reports whether a top-level folder of BooksRoot is
+// indexed. An empty allowlist admits every folder.
+func (idx *Indexer) bookCollectionAllowed(name string) bool {
+	if len(idx.BooksCollections) == 0 {
+		return true
+	}
+	for _, c := range idx.BooksCollections {
+		if c == name {
+			return true
+		}
+	}
+	return false
 }
 
 // forceKey is the context key for forcing a full reindex (bypassing the
@@ -736,16 +751,28 @@ func (idx *Indexer) indexManualFile(ctx context.Context, path string, parts []st
 
 func (idx *Indexer) indexBooks(ctx context.Context, r *Result) error {
 	return filepath.WalkDir(idx.BooksRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".md") {
+		if err != nil {
 			return nil
 		}
 		rel, _ := filepath.Rel(idx.BooksRoot, path)
 		rel = filepath.ToSlash(rel)
 		parts := strings.Split(rel, "/")
+		if d.IsDir() {
+			if len(parts) == 1 && rel != "." && !idx.bookCollectionAllowed(parts[0]) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".md") {
+			return nil
+		}
 		collection := "misc"
 		section := strings.TrimSuffix(filepath.Base(path), ".md")
-		if len(parts) >= 1 {
+		if len(parts) >= 2 {
 			collection = parts[0]
+		}
+		if !idx.bookCollectionAllowed(collection) {
+			return nil
 		}
 
 		info, statErr := os.Stat(path)
