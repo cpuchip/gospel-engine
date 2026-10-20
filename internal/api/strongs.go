@@ -121,10 +121,13 @@ func (s *Server) handleStrongsSearch(w http.ResponseWriter, r *http.Request) {
 		  SELECT *, CASE
 		    WHEN lower(step_gloss) = $1 OR lower(translit) = $1 THEN 100
 		    WHEN lower(kjv_def) ~ ('\m' || $1 || '\M') THEN 60
-		    WHEN strpos(lower(step_gloss), $1) > 0 THEN 40
+		    WHEN lower(step_gloss) ~ ('\m' || $1 || '\M') THEN 40
 		    WHEN lower(strongs_def) ~ ('\m' || $1 || '\M') THEN 20
 		  END AS score
 		  FROM strongs_lexicon
+		  -- extended STEPBible entries beyond Strong's own range carry no lemma
+		  -- and tag no KJV word; a hit on one shows a reader no Greek or Hebrew
+		  WHERE lemma <> ''
 		) x
 		WHERE score IS NOT NULL
 		ORDER BY score DESC, lang DESC, (substring(number FROM 2))::int
