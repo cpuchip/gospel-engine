@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -48,8 +49,8 @@ func TestNearestSpeakerFilter(t *testing.T) {
 		{2, "nelson far", vec(3, 0.9)},
 	}
 	for i, r := range rows {
-		if _, err := d.Pool.Exec(ctx, `INSERT INTO embeddings (source_type, source_id, layer, content, embedding) VALUES ('talks', $1, 'p'||$2::text, $3, $4)`,
-			r.talk, i, r.text, r.v); err != nil {
+		if _, err := d.Pool.Exec(ctx, `INSERT INTO embeddings (source_type, source_id, layer, content, embedding) VALUES ('talks', $1, $2, $3, $4)`,
+			r.talk, fmt.Sprintf("p%d", i), r.text, r.v); err != nil {
 			t.Fatal(err)
 		}
 	}
