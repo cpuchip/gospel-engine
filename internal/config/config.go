@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -24,9 +25,10 @@ type Config struct {
 	// LinkMode controls how search results reference their source:
 	// "web" (canonical churchofjesuschrist.org URL only), "fs" (file_path only),
 	// or "both" (default). Env GOSPEL_LINK_MODE.
-	LinkMode       string
-	BooksPath      string // /data/books
-	EmbeddingsPath string // /data/embeddings (pre-computed JSONL files)
+	LinkMode         string
+	BooksPath        string   // /data/books
+	BooksCollections []string // BOOKS_COLLECTIONS: top-level folders of BooksPath to index; empty means every folder
+	EmbeddingsPath   string   // /data/embeddings (pre-computed JSONL files)
 
 	// MCP binaries served at /download/gospel-mcp-{os}-{arch}
 	MCPBinariesPath string // /opt/mcp-binaries
@@ -75,6 +77,7 @@ func Load() (*Config, error) {
 		GospelLibraryPath:  env("GOSPEL_LIBRARY_PATH", "/data/gospel-library"),
 		LinkMode:           env("GOSPEL_LINK_MODE", "both"),
 		BooksPath:          env("BOOKS_PATH", "/data/books"),
+		BooksCollections:   envList("BOOKS_COLLECTIONS"),
 		EmbeddingsPath:     env("EMBEDDINGS_PATH", "/data/embeddings"),
 		MCPBinariesPath:    env("MCP_BINARIES_PATH", "/opt/mcp-binaries"),
 		Version:            env("VERSION", "dev"),
@@ -127,4 +130,16 @@ func envInt(key string, def int) int {
 		return def
 	}
 	return n
+}
+
+// envList reads a comma-separated list; blank entries are dropped and an unset
+// or empty variable is nil.
+func envList(key string) []string {
+	var out []string
+	for _, s := range strings.Split(os.Getenv(key), ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
