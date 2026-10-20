@@ -31,6 +31,7 @@ const (
 
 // Citation is one place the index says the verse was cited.
 type Citation struct {
+	TalkID    string `json:"-"`                  // the index's id for the citing talk or discourse
 	Reference string `json:"reference"`          // the index's own locator: "1989-O:54", "JD 19:81b"
 	Speaker   string `json:"speaker"`            //
 	Title     string `json:"title"`              //
@@ -43,7 +44,8 @@ type Result struct {
 	Reference string     `json:"reference"` // as asked, e.g. "Ether 12:27"
 	Source    string     `json:"source"`
 	SourceURL string     `json:"source_url"`
-	Count     int        `json:"count"`
+	Count     int        `json:"count"`          // citation rows: one per place a talk cites the verse
+	Unique    int        `json:"unique_sources"` // distinct citing talks and discourses
 	Citations []Citation `json:"citations"`
 	FetchedAt time.Time  `json:"fetched_at"`
 	Cached    bool       `json:"cached"`
@@ -132,7 +134,7 @@ func (c *Client) Lookup(ctx context.Context, book string, chapter int, verses, d
 	if err != nil {
 		return nil, err
 	}
-	res := Result{Source: Source, SourceURL: SourceURL, Count: len(cites), Citations: cites, FetchedAt: now}
+	res := Result{Source: Source, SourceURL: SourceURL, Count: len(cites), Unique: uniqueSources(cites), Citations: cites, FetchedAt: now}
 
 	c.mu.Lock()
 	if len(c.cache) >= c.MaxItems {
@@ -190,7 +192,7 @@ func Parse(body, baseURL string) ([]Citation, error) {
 		if r == nil || ti == nil {
 			return nil, fmt.Errorf("citation index answer changed shape (talk %s has no locator or title)", t[1])
 		}
-		c := Citation{Title: clean(ti[1]), IndexURL: talkLink(baseURL, t[1], t[2])}
+		c := Citation{TalkID: t[1], Title: clean(ti[1]), IndexURL: talkLink(baseURL, t[1], t[2])}
 		loc := clean(r[1])
 		if s := refSplitR.FindStringSubmatch(loc); s != nil {
 			c.Reference, c.Speaker = s[1], s[2]
@@ -206,6 +208,16 @@ func Parse(body, baseURL string) ([]Citation, error) {
 }
 
 func clean(s string) string { return strings.Join(strings.Fields(html.UnescapeString(s)), " ") }
+
+// uniqueSources counts the distinct citing items: the index lists a talk once
+// per place it cites the verse, so rows overstate "how many talks".
+func uniqueSources(cs []Citation) int {
+	seen := make(map[string]struct{}, len(cs))
+	for _, c := range cs {
+		seen[c.TalkID] = struct{}{}
+	}
+	return len(seen)
+}
 
 // talkLink opens a citing talk in the index at the citation. The form is the
 // index's own (base.js encodeCenter/encodeTalk, read 2026-10-09): the hash

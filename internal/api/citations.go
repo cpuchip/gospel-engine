@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/cpuchip/gospel-engine/internal/citations"
@@ -43,6 +44,11 @@ func (s *Server) handleCitations(w http.ResponseWriter, r *http.Request) {
 		log.Printf("citations %s: %v", display, err)
 		http.Error(w, "the BYU Scripture Citation Index did not answer; try again later ("+citations.SourceURL+")", http.StatusBadGateway)
 		return
+	}
+	// limit trims the rows returned; count and unique_sources still describe
+	// the whole answer. The cached copy keeps its full list.
+	if limit, _ := strconv.Atoi(r.URL.Query().Get("limit")); limit > 0 && len(res.Citations) > limit {
+		res.Citations = res.Citations[:limit]
 	}
 	writeJSON(w, http.StatusOK, res)
 }
