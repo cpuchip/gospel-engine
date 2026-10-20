@@ -271,6 +271,36 @@ func (s *Server) getByReference(w http.ResponseWriter, r *http.Request, ref stri
 	}
 }
 
+// notFoundReason says which part of a parsed reference the library does not
+// have ("Ether has 15 chapters", "Ether 12 has 27 verses"), so a caller can
+// correct the reference instead of guessing which part was wrong. A 400 for
+// an unparseable reference already says what it tried.
+func (s *Server) notFoundReason(ctx context.Context, p parsedRef) string {
+	name := indexer.BookDisplayName(p.Book)
+	var chapters int
+	if err := s.DB.Pool.QueryRow(ctx,
+		`SELECT COALESCE(max(chapter), 0) FROM scriptures WHERE book = $1`, p.Book,
+	).Scan(&chapters); err != nil || chapters == 0 {
+		return name + " is not in the library"
+	}
+	if p.Chapter > chapters {
+		return fmt.Sprintf("%s has %d chapters", name, chapters)
+	}
+	var verses int
+	if err := s.DB.Pool.QueryRow(ctx,
+		`SELECT COALESCE(max(verse), 0) FROM scriptures WHERE book = $1 AND chapter = $2`, p.Book, p.Chapter,
+	).Scan(&verses); err != nil || verses == 0 {
+		return fmt.Sprintf("%s %d is not in the library", name, p.Chapter)
+	}
+	if p.Verse > verses {
+		return fmt.Sprintf("%s %d has %d verses", name, p.Chapter, verses)
+	}
+	if p.Verse == 0 {
+		return fmt.Sprintf("%s %d is not in the library as a chapter", name, p.Chapter)
+	}
+	return fmt.Sprintf("%s %d:%d is not in the library", name, p.Chapter, p.Verse)
+}
+
 func (s *Server) getSingleVerse(w http.ResponseWriter, r *http.Request, queryRef string, p parsedRef, crossRefs, strongs bool) {
 	row := s.DB.Pool.QueryRow(r.Context(),
 		`SELECT id, volume, book, chapter, verse, reference, text, file_path
@@ -278,7 +308,7 @@ func (s *Server) getSingleVerse(w http.ResponseWriter, r *http.Request, queryRef
 		p.Book, p.Chapter, p.Verse)
 	var v verseRow
 	if err := row.Scan(&v.ID, &v.Volume, &v.Book, &v.Chapter, &v.Verse, &v.Reference, &v.Text, &v.FilePath); err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
+		http.Error(w, s.notFoundReason(r.Context(), p), http.StatusNotFound)
 		return
 	}
 	resp := map[string]any{
@@ -331,7 +361,7 @@ func (s *Server) getVerseRange(w http.ResponseWriter, r *http.Request, queryRef 
 		verses = append(verses, v)
 	}
 	if len(verses) == 0 {
-		http.Error(w, "not found", http.StatusNotFound)
+		http.Error(w, s.notFoundReason(r.Context(), p), http.StatusNotFound)
 		return
 	}
 	resp := map[string]any{
@@ -364,7 +394,7 @@ func (s *Server) getChapter(w http.ResponseWriter, r *http.Request, queryRef str
 		chapter                                    int
 	)
 	if err := row.Scan(&id, &volume, &book, &chapter, &title, &fullContent, &filePath); err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
+		http.Error(w, s.notFoundReason(r.Context(), p), http.StatusNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

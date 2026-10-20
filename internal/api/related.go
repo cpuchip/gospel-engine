@@ -180,7 +180,7 @@ func (s *Server) relatedSeeds(ctx context.Context, ref, typ, idStr string) ([]st
 			seeds = append(seeds, indexer.VerseKey(vol, book, ch, v))
 		}
 		if len(seeds) == 0 {
-			return nil, "not found", http.StatusNotFound
+			return nil, s.notFoundReason(ctx, p), http.StatusNotFound
 		}
 		if p.Verse == 0 {
 			seeds = append(seeds, indexer.ChapterKey(vol, p.Book, p.Chapter))
