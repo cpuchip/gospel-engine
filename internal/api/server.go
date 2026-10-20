@@ -224,6 +224,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	// scripture lookups.
 	crossRefs := r.URL.Query().Get("cross_refs") == "true"
 	strongs := r.URL.Query().Get("strongs") == "true"
+	clean := r.URL.Query().Get("format") == "clean"
 
 	if ref != "" {
 		s.getByReference(w, r, ref, crossRefs, strongs)
@@ -235,7 +236,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad id", http.StatusBadRequest)
 			return
 		}
-		s.getByID(w, r, typ, id)
+		s.getByID(w, r, typ, id, clean)
 		return
 	}
 	http.Error(w, "provide either reference= or (type= and id=)", http.StatusBadRequest)
@@ -412,7 +413,7 @@ func (s *Server) getChapter(w http.ResponseWriter, r *http.Request, queryRef str
 	})
 }
 
-func (s *Server) getByID(w http.ResponseWriter, r *http.Request, typ string, id int64) {
+func (s *Server) getByID(w http.ResponseWriter, r *http.Request, typ string, id int64, clean bool) {
 	var (
 		query string
 		out   = map[string]any{"source_type": typ, "id": id}
@@ -467,6 +468,10 @@ func (s *Server) getByID(w http.ResponseWriter, r *http.Request, typ string, id 
 	default:
 		http.Error(w, "unknown type", http.StatusBadRequest)
 		return
+	}
+	// format=clean: the prose without footnote markers, anchors and link targets
+	if ct, ok := out["content"].(string); ok && clean {
+		out["content"], out["format"] = cleanMarkup(ct), "clean"
 	}
 	writeJSON(w, http.StatusOK, out)
 }

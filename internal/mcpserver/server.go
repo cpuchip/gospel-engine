@@ -140,6 +140,8 @@ func (s *Server) register() {
 			mcp.WithNumber("id", mcp.Description("Record id (with type=)")),
 			mcp.WithBoolean("cross_refs", mcp.Description("Include footnote-derived cross-references (opt-in; default false). Ignored for chapter and type+id lookups.")),
 			mcp.WithBoolean("strongs", mcp.Description("Include the KJV's word-by-word Strong's tagging for returned Old/New Testament verses (opt-in; default false).")),
+			mcp.WithString("format", mcp.Description("For type+id fetches of talks, manuals, books and study aids: \"clean\" returns the content as plain prose, without the corpus's footnote markers, anchors and link targets (for a knowledge base; the default keeps them)."),
+				mcp.Enum("clean")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			q := url.Values{}
@@ -159,6 +161,9 @@ func (s *Server) register() {
 			}
 			if req.GetBool("strongs", false) {
 				q.Set("strongs", "true")
+			}
+			if req.GetString("format", "") == "clean" {
+				q.Set("format", "clean")
 			}
 			body, err := s.callAPI(ctx, "/api/get?"+q.Encode())
 			if err != nil {
