@@ -96,6 +96,7 @@ func (s *Server) register() {
 			mcp.WithArray("sources", mcp.Description("Subset of: scriptures, talks, manuals, books, study_aids"),
 				mcp.Items(map[string]any{"type": "string", "enum": []string{"scriptures", "talks", "manuals", "books", "study_aids"}})),
 			mcp.WithNumber("limit", mcp.Description("Max results (default 20, cap 100)")),
+			mcp.WithString("speaker", mcp.Description("Only talks by this speaker, matched inside the name as the corpus has it (\"Bednar\", \"Russell M. Nelson\"); implies sources = talks. Use it for a known talk instead of putting the name in the query, where it pulls in talks that merely quote the speaker.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			query := strings.TrimSpace(req.GetString("query", ""))
@@ -112,6 +113,9 @@ func (s *Server) register() {
 			}
 			if sources := req.GetStringSlice("sources", nil); len(sources) > 0 {
 				q.Set("sources", strings.Join(sources, ","))
+			}
+			if speaker := strings.TrimSpace(req.GetString("speaker", "")); speaker != "" {
+				q.Set("speaker", speaker)
 			}
 			body, err := s.callAPI(ctx, "/api/search?"+q.Encode())
 			if err != nil {
